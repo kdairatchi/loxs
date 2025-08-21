@@ -9,3 +9,6 @@ gitpython
 prompt_toolkit
 pyyaml
 Flask
+pytest
+pytest-xdist
+pytest-mock
