@@ -1,1034 +1,394 @@
 #!/bin/bash
+## Automated Bug Bounty recon script
+## By Cas van Cooten
 
-set -euo pipefail
+scriptDir=$(dirname "$(readlink -f "$0")")
+baseDir=$PWD
+lastNotified=0
+thorough=true
+notify=true
+overwrite=false
 
-# Colors for better output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-NC='\033[0m' # No Color
+source "./utils/screenshotReport.sh"
 
-# Global variables
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="output"
-TOOLS_DIR="$HOME/tools"
-GO_BIN="$HOME/go/bin"
+function notify {
+    if [ "$notify" = true ]
+    then
+        if [ $(($(date +%s) - lastNotified)) -le 3 ]
+        then
+            echo "[!] Notifying too quickly, sleeping to avoid skipped notifications..."
+            sleep 3
+        fi
 
-# Progress tracking
-TOTAL_STEPS=0
-CURRENT_STEP=0
-
-# Function to print colored output
-print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_progress() {
-    CURRENT_STEP=$((CURRENT_STEP + 1))
-    local progress_bar=""
-    local completed=$((CURRENT_STEP * 20 / TOTAL_STEPS))
-    
-    # Create simple progress bar
-    for ((i=1; i<=20; i++)); do
-        if [ $i -le $completed ]; then
-            progress_bar="${progress_bar}█"
+        # Format string to escape special characters and send message through Telegram API.
+        if [ -z "$DOMAIN" ]
+        then
+            message=`echo -ne "*BugBountyScanner:* $1" | sed 's/[^a-zA-Z 0-9*_]/\\\\&/g'`
         else
-            progress_bar="${progress_bar}░"
+            message=`echo -ne "*BugBountyScanner [$DOMAIN]:* $1" | sed 's/[^a-zA-Z 0-9*_]/\\\\&/g'`
         fi
-    done
     
-    local percentage=$((CURRENT_STEP * 100 / TOTAL_STEPS))
-    echo -e "${PURPLE}[PROGRESS ${percentage}%]${NC} ${progress_bar} Step $CURRENT_STEP/$TOTAL_STEPS: $1"
-}
-
-# Function to check if a command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Function to validate regex patterns before using them
-validate_pattern() {
-    local pattern="$1"
-    
-    # Quick syntax check for common issues
-    if [ -z "$pattern" ]; then
-        return 1
-    fi
-    
-    # Check for unmatched brackets and parentheses
-    local open_paren=$(echo "$pattern" | grep -o '(' | wc -l)
-    local close_paren=$(echo "$pattern" | grep -o ')' | wc -l)
-    local open_bracket=$(echo "$pattern" | grep -o '\[' | wc -l)
-    local close_bracket=$(echo "$pattern" | grep -o '\]' | wc -l)
-    
-    if [ "$open_paren" -ne "$close_paren" ] || [ "$open_bracket" -ne "$close_bracket" ]; then
-        print_warning "Pattern has unmatched brackets/parentheses: $pattern"
-        return 1
-    fi
-    
-    # Test the pattern with a simple string to catch basic errors
-    if echo "test=value&param=data" | timeout 5 grep -E "$pattern" >/dev/null 2>&1; then
-        return 0
-    elif echo "?test=value&param=data" | timeout 5 grep -E "$pattern" >/dev/null 2>&1; then
-        return 0
-    else
-        print_warning "Pattern validation failed: $pattern"
-        return 1
+        curl -s -X POST "https://api.telegram.org/bot$telegram_api_key/sendMessage" -d chat_id="$telegram_chat_id" -d text="$message" -d parse_mode="MarkdownV2" &> /dev/null
+        lastNotified=$(date +%s)
     fi
 }
 
-# Function to handle process timeouts and cleanup
-handle_timeout() {
-    local pid=$1
-    local timeout=$2
-    local description="$3"
-    
-    # Wait for process with timeout
-    local count=0
-    while kill -0 "$pid" 2>/dev/null && [ $count -lt "$timeout" ]; do
-        sleep 1
-        count=$((count + 1))
-    done
-    
-    # Kill if still running
-    if kill -0 "$pid" 2>/dev/null; then
-        print_warning "$description timed out, terminating..."
-        kill -TERM "$pid" 2>/dev/null
-        sleep 2
-        kill -KILL "$pid" 2>/dev/null
-        return 1
-    fi
-    
-    return 0
-}
+for arg in "$@"
+do
+    case $arg in
+        -h|--help)
+        echo "BugBountyHunter - Automated Bug Bounty reconnaissance script"
+        echo " "
+        echo "$0 [options]"
+        echo " "
+        echo "options:"
+        echo "-h, --help                    show brief help"
+        echo "-t, --toolsdir <dir>          tools directory (no trailing /), defaults to '/opt'"
+        echo "-q, --quick                   perform quick recon only (default: false)"
+        echo "-d, --domain <domain>         top domain to scan, can take multiple"
+        echo "-o, --outputdirectory <dir>   parent output directory, defaults to current directory (subfolders will be created per domain)"
+        echo "-w, --overwrite               overwrite existing files. Skip steps with existing files if not provided (default: false)"
+        echo " "
+        echo "Note: 'ToolsDir', as well as your 'telegram_api_key' and 'telegram_chat_id' can be defined in .env or through (Docker) environment variables."
+        echo " "
+        echo "example:"
+        echo "$0 --quick -d google.com -d uber.com -t /opt"
+        exit 0
+        ;;
+        -q|--quick)
+        thorough=false
+        shift
+        ;;
+        -d|--domain)
+        domainargs+=("$2")
+        shift
+        shift
+        ;;
+        -t|--toolsdir)
+        toolsDir="$2"
+        shift
+        shift
+        ;;
+        -o|--outputdirectory)
+        baseDir="$2"
+        shift
+        shift
+        ;;
+        -w|--overwrite)
+        overwrite=true
+        shift
+    esac
+done
 
-# Function to install Go tools
-install_go_tool() {
-    local tool_name="$1"
-    local install_cmd="$2"
-    
-    if ! command_exists "$tool_name"; then
-        print_status "Installing $tool_name..."
-        if eval "$install_cmd"; then
-            print_success "$tool_name installed successfully"
-        else
-            print_error "Failed to install $tool_name"
-            return 1
-        fi
-    else
-        print_success "$tool_name is already installed"
-    fi
-}
+if [ -f "$scriptDir/.env" ]
+then
+    set -a
+    . .env
+    set +a
+fi
 
-# Function to install Python tools
-install_python_tool() {
-    local tool_name="$1"
-    local install_cmd="$2"
-    
-    if ! command_exists "$tool_name"; then
-        print_status "Installing $tool_name..."
-        if eval "$install_cmd"; then
-            print_success "$tool_name installed successfully"
-        else
-            print_error "Failed to install $tool_name"
-            return 1
-        fi
-    else
-        print_success "$tool_name is already installed"
-    fi
-}
+if [ -z "$telegram_api_key" ] || [ -z "$telegram_chat_id" ]
+then
+    echo "[i] \$telegram_api_key and \$telegram_chat_id variables not found, disabling notifications..."
+    notify=false
+fi
 
-# Function to install all required tools
-install_tools() {
-    print_status "Checking and installing required tools..."
-    
-    # Ensure directories exist
-    mkdir -p "$TOOLS_DIR" "$GO_BIN"
-    
-    # Add Go bin to PATH if not already there
-    if [[ ":$PATH:" != *":$GO_BIN:"* ]]; then
-        export PATH="$GO_BIN:$PATH"
-    fi
-    
-    # Install Go-based tools
-    install_go_tool "katana" "go install github.com/projectdiscovery/katana/cmd/katana@latest"
-    install_go_tool "gf" "go install github.com/tomnomnom/gf@latest"
-    install_go_tool "anew" "go install github.com/tomnomnom/anew@latest"
-    install_go_tool "Gxss" "go install github.com/KathanP19/Gxss@latest"
-    install_go_tool "kxss" "go install github.com/Emoe/kxss@latest"
-    install_go_tool "subfinder" "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
-    install_go_tool "httpx" "go install github.com/projectdiscovery/httpx/cmd/httpx@latest"
-    install_go_tool "waybackurls" "go install github.com/tomnomnom/waybackurls@latest"
-    install_go_tool "gau" "go install github.com/lc/gau/v2/cmd/gau@latest"
-    
-    # Check for 'timeout' command
-    if ! command_exists "timeout"; then
-        print_warning "'timeout' command not found. Some operations may run indefinitely. Please install coreutils (e.g., 'brew install coreutils' on macOS, 'sudo apt-get install coreutils' on Debian/Ubuntu, 'sudo yum install coreutils' on CentOS/RHEL)."
-    fi
-    
-    # Install gf patterns if gf is installed
-    if command_exists "gf"; then
-        if [ ! -d "$HOME/.gf" ]; then
-            print_status "Installing gf patterns..."
-            git clone https://github.com/1ndianl33t/Gf-Patterns "$HOME/.gf" || print_warning "Failed to clone gf patterns"
-        fi
-    fi
-    
-    print_success "Tool installation check completed"
-}
-
-# Function to validate URL
-validate_url() {
-    local url="$1"
-    if [[ ! $url =~ ^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(/.*)?$ ]]; then
-        print_error "Invalid URL format: $url"
-        return 1
-    fi
-    return 0
-}
-
-# Function to normalize URL input
-normalize_url() {
-    local input="$1"
-    local normalized_url
-    
-    # Remove trailing slash
-    input="${input%/}"
-    
-    # Add https:// if no protocol is specified
-    if [[ ! $input =~ ^https?:// ]]; then
-        normalized_url="https://$input"
-    else
-        normalized_url="$input"
-    fi
-    
-    echo "$normalized_url"
-}
-
-# Function to gather URLs with parallel processing
-gather_urls() {
-    local website_url="$1"
-    local domain=$(echo "$website_url" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
-    local temp_file="$OUTPUT_DIR/temp_urls.txt"
-    local temp_dir="$OUTPUT_DIR/temp"
-    
-    print_progress "Gathering URLs from multiple sources for $domain (parallel processing)"
-    
-    # Create temporary directory and files
-    mkdir -p "$temp_dir"
-    > "$temp_file"
-    
-    if command_exists "katana"; then
-        print_status "Starting katana passive scan..."
-        if command_exists "timeout"; then
-            (echo "$website_url" | timeout 300 katana -ps -pss waybackarchive,commoncrawl,alienvault -f qurl -silent > "$temp_dir/katana_passive.txt" 2>/dev/null || print_warning "Katana passive scan had issues") &
-        else
-            (echo "$website_url" | katana waybackarchive,commoncrawl,alienvault -f qurl -silent > "$temp_dir/katana_passive.txt" 2>/dev/null || print_warning "Katana passive scan had issues") &
-        fi
-    fi
-    
-    # Method 2: Katana active crawling (background)
-    if command_exists "katana"; then
-        print_status "Starting katana active crawling..."
-        if command_exists "timeout"; then
-            (timeout 600 katana -u "$website_url" -d 3 -f qurl -c 50 > "$temp_dir/katana_active.txt" 2>/dev/null || print_warning "Katana active scan had issues") &
-        else
-            (katana -u "$website_url" -d 3 -f qurl -silent -c 50 > "$temp_dir/katana_active.txt" 2>/dev/null || print_warning "Katana active scan had issues") &
-        fi
-    fi
-    
-    # Method 3: Wayback URLs (background)
-    if command_exists "waybackurls"; then
-        print_status "Starting Wayback Machine fetch..."
-        if command_exists "timeout"; then
-            (echo "$domain" | timeout 180 waybackurls > "$temp_dir/wayback.txt" 2>/dev/null || print_warning "Waybackurls had issues") &
-        else
-            (echo "$domain" | waybackurls > "$temp_dir/wayback.txt" 2>/dev/null || print_warning "Waybackurls had issues") &
-        fi
-    fi
-    
-    # Method 4: GetAllUrls (GAU) (background)
-    if command_exists "gau"; then
-        print_status "Starting GAU fetch..."
-        if command_exists "timeout"; then
-            (echo "$domain" | gau --threads 20 --timeout 10 > "$temp_dir/gau.txt" 2>/dev/null || print_warning "GAU had issues") &
-        else
-            (echo "$domain" | gau --threads 20 > "$temp_dir/gau.txt" 2>/dev/null || print_warning "GAU had issues") &
-        fi
-    fi
-    
-    # Method 5: Subdomain enumeration + URL discovery (background)
-    if command_exists "subfinder" && command_exists "httpx" && command_exists "katana"; then
-        print_status "Starting subdomain enumeration..."
-        if command_exists "timeout"; then
-            (timeout 300 subfinder -d "$domain" -all | timeout 180 httpx -threads 50 | head -20 | while read -r subdomain; do
-                echo "$subdomain" | timeout 60 katana -pss waybackarchive -f qurl -silent 2>/dev/null
-            done > "$temp_dir/subdomains.txt" 2>/dev/null || print_warning "Subdomain enumeration had issues") &
-        else
-            (subfinder -d "$domain" -all | httpx -threads 50 | head -20 | while read -r subdomain; do
-                echo "$subdomain" | katana  -pss waybackarchive -f qurl 2>/dev/null
-            done > "$temp_dir/subdomains.txt" 2>/dev/null || print_warning "Subdomain enumeration had issues") &
-        fi
-    fi
-    
-    # Show progress while waiting
-    local wait_count=0
-    while [ $(jobs -r | wc -l) -gt 0 ] && [ $wait_count -lt 120 ]; do
-        echo -ne "\rWaiting for URL gathering to complete... ${wait_count}s"
-        sleep 5
-        wait_count=$((wait_count + 5))
-    done
+if [ ! -d "$baseDir" ]
+then
+    read -r -N 1 -p "[?] Provided output directory \"$baseDir\" does not exist, create it? [Y/N] "
     echo
-    
-    # Wait for all background jobs to complete (with timeout)
-    print_status "Finalizing URL collection..."
-    wait
-    
-    # Combine all results
-    cat "$temp_dir"/*.txt > "$temp_file" 2>/dev/null || touch "$temp_file"
-    
-    # Enhanced deduplication and cleaning with multiple methods
-    print_status "Optimizing URL list..."
-    
-    # Pre-filter valid URLs to reduce processing time
-    grep -E '^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' "$temp_file" 2>/dev/null | \
-        grep -v -E '\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|ttf|eot|pdf|zip|tar|gz)$' > "$OUTPUT_DIR/temp_filtered.txt" 2>/dev/null || touch "$OUTPUT_DIR/temp_filtered.txt"
-    
-    # Use uro if available, otherwise use custom deduplication
-    if command_exists "uro" && [ -s "$OUTPUT_DIR/temp_filtered.txt" ]; then
-        uro < "$OUTPUT_DIR/temp_filtered.txt" | sort -u > "$OUTPUT_DIR/all_urls.txt" 2>/dev/null
-    elif [ -s "$OUTPUT_DIR/temp_filtered.txt" ]; then
-        # Custom fast deduplication preserving parameter structure
-        sort -u "$OUTPUT_DIR/temp_filtered.txt" | \
-            awk '!seen[substr($0, 1, index($0, "?") ? index($0, "?") : length($0))]++' > "$OUTPUT_DIR/all_urls.txt" 2>/dev/null
-    else
-        # Fallback for any remaining URLs
-        sort -u "$temp_file" 2>/dev/null | head -10000 > "$OUTPUT_DIR/all_urls.txt" || touch "$OUTPUT_DIR/all_urls.txt"
-    fi
-    
-    # Clean up intermediate file
-    rm -f "$OUTPUT_DIR/temp_filtered.txt"
-    
-    # Clean up temporary files
-    rm -rf "$temp_dir" "$temp_file"
-    
-    local url_count=$(wc -l < "$OUTPUT_DIR/all_urls.txt" 2>/dev/null || echo "0")
-    print_success "Gathered $url_count unique URLs in parallel"
-    
-    # Show sample URLs if verbose mode
-    if [ "$url_count" -gt 0 ] && [ "$url_count" -lt 10 ]; then
-        print_status "Sample URLs found:"
-        cat "$OUTPUT_DIR/all_urls.txt" | head -5 | sed 's/^/  - /'
-    elif [ "$url_count" -gt 0 ]; then
-        print_status "Sample URLs found:"
-        cat "$OUTPUT_DIR/all_urls.txt" | head -3 | sed 's/^/  - /'
-        echo "  ... and $((url_count - 3)) more URLs"
-    fi
-}
-
-# Function to safely execute grep with error handling
-safe_grep() {
-    local pattern="$1"
-    local file="$2"
-    local output_file="$3"
-    
-    # Validate inputs
-    if [ -z "$pattern" ] || [ ! -f "$file" ] || [ -z "$output_file" ]; then
-        print_error "Invalid parameters for safe_grep"
-        return 1
-    fi
-    
-    # Validate file is readable
-    if [ ! -r "$file" ]; then
-        print_error "Cannot read file: $file"
-        return 1
-    fi
-    
-    # Validate pattern before use with smart fallbacks
-    if ! validate_pattern "$pattern"; then
-        print_warning "Using fallback pattern for $filter_type"
-        case "$filter_type" in
-            "xss") pattern="[?&](q|search|input)=" ;;
-            "openredirect") pattern="[?&](url|redirect)=" ;;
-            "lfi") pattern="[?&](file|path|page)=" ;;
-            "sqli") pattern="[?&](id|user|login)=" ;;
-            "ssrf") pattern="[?&](url|uri|host)=" ;;
-            "rce") pattern="[?&](cmd|exec)=" ;;
-            "xxe") pattern="[?&](xml|api)=" ;;
-            *) pattern="[?&][a-zA-Z]+=" ;;
-        esac
-    fi
-    
-    # Create output directory if needed
-    mkdir -p "$(dirname "$output_file")"
-    
-    # Use grep with proper error handling, timeout, and resource limits
-    {
-        if command -v timeout >/dev/null 2>&1; then
-            timeout 30 grep -iE "$pattern" "$file" 2>/dev/null | sed 's/=.*/=/' | sort -u > "$output_file"
-        else
-            # Fallback without timeout
-            grep -iE "$pattern" "$file" 2>/dev/null | sed 's/=.*/=/' | sort -u > "$output_file"
-        fi
-    } || {
-        # Create empty file on failure to prevent downstream errors
-        touch "$output_file"
-        print_warning "Pattern matching failed for $(basename "$output_file")"
-        return 1
-    }
-    
-    return 0
-}
-
-# Function to run parallel filtering jobs with enhanced error handling
-run_parallel_filter() {
-    local urls_file="$1"
-    local filter_type="$2"
-    local pattern="$3"
-    local output_file="$OUTPUT_DIR/${filter_type}_endpoints.txt"
-    
-    # Validate inputs
-    if [ ! -f "$urls_file" ] || [ -z "$filter_type" ] || [ -z "$pattern" ]; then
-        print_error "Invalid parameters for filtering $filter_type"
-        return 1
-    fi
-    
-    print_status "Filtering URLs for potential $filter_type endpoints..."
-    
-    # Initialize output file
-    touch "$output_file"
-    
-    # Try gf first if available and filter type matches
-    if command_exists "gf" && [[ "$filter_type" != "rce" && "$filter_type" != "xxe" ]]; then
-        local gf_pattern="$filter_type"
-        case "$filter_type" in
-            "openredirect") gf_pattern="redirect" ;;
-            "lfi") gf_pattern="lfi" ;;
-            "sqli") gf_pattern="sqli" ;;
-            "ssrf") gf_pattern="ssrf" ;;
-            "xss") gf_pattern="xss" ;;
-        esac
-        
-        # Try gf with timeout and error handling
-        if command -v timeout >/dev/null 2>&1; then
-            if timeout 90 bash -c "cat '$urls_file' | gf '$gf_pattern' 2>/dev/null | sed 's/=.*/=/' | sort -u > '$output_file'" 2>/dev/null; then
-                local count=$(wc -l < "$output_file" 2>/dev/null || echo "0")
-                if [ "$count" -gt 0 ]; then
-                    return 0
-                fi
-            fi
-        fi
-    fi
-    
-    # Fallback to safe_grep with enhanced error handling
-    if safe_grep "$pattern" "$urls_file" "$output_file"; then
-        return 0
-    else
-        print_warning "Fallback pattern matching failed for $filter_type, trying basic pattern"
-        # Last resort: use keyword-based matching
-        case "$filter_type" in
-            "xss") 
-                grep -iE "(search|query|input|message|comment)" "$urls_file" 2>/dev/null | grep -E '[?&]' | head -50 > "$output_file" || touch "$output_file"
-                ;;
-            "openredirect")
-                grep -iE "(redirect|url|return|next)" "$urls_file" 2>/dev/null | grep -E '[?&]' | head -50 > "$output_file" || touch "$output_file"
-                ;;
-            "lfi")
-                grep -iE "(file|path|page|include)" "$urls_file" 2>/dev/null | grep -E '[?&]' | head -50 > "$output_file" || touch "$output_file"
-                ;;
-            "sqli")
-                grep -iE "(id|user|login|search|view)" "$urls_file" 2>/dev/null | grep -E '[?&]' | head -50 > "$output_file" || touch "$output_file"
-                ;;
-            "ssrf")
-                grep -iE "(url|uri|host|domain|ping)" "$urls_file" 2>/dev/null | grep -E '[?&]' | head -50 > "$output_file" || touch "$output_file"
-                ;;
-            "rce")
-                grep -iE "(cmd|exec|system|shell|ping)" "$urls_file" 2>/dev/null | grep -E '[?&]' | head -50 > "$output_file" || touch "$output_file"
-                ;;
-            "xxe")
-                grep -iE "(xml|api|upload|import)" "$urls_file" 2>/dev/null | grep -E '[?&]' | head -50 > "$output_file" || touch "$output_file"
-                ;;
-            *)
-                touch "$output_file"
-                ;;
-        esac
-        print_warning "Used keyword fallback for $filter_type filtering"
-        return 1
-    fi
-}
-
-# Function to filter URLs for vulnerabilities with parallel processing
-filter_vulnerabilities() {
-    local urls_file="$OUTPUT_DIR/all_urls.txt"
-    
-    if [ ! -f "$urls_file" ] || [ ! -s "$urls_file" ]; then
-        print_error "No URLs found to filter"
-        return 1
-    fi
-    
-    print_progress "Filtering URLs for different vulnerability types (parallel processing)"
-    
-    # Pre-process URLs for faster filtering with optimized deduplication
-    local filtered_urls="$OUTPUT_DIR/filtered_urls.txt"
-    
-    # Only process URLs with parameters for vulnerability testing
-    print_status "Pre-filtering URLs with parameters..."
-    
-    # Fast parameter extraction and deduplication
-    if [ -s "$urls_file" ]; then
-        # Extract only URLs with parameters, remove duplicates by base URL + param names
-        grep -E '[?&][a-zA-Z0-9_-]+=' "$urls_file" 2>/dev/null | \
-            head -50000 | \
-            awk -F'[?&]' '{
-                url_base = $1; params = ""
-                for(i=2; i<=NF; i++) {
-                    split($i, param_pair, "=")
-                    if(param_pair[1] != "") params = params param_pair[1] "="
-                }
-                key = url_base "?" params
-                if(!seen[key]++) print $0
-            }' > "$filtered_urls" 2>/dev/null || touch "$filtered_urls"
-    else
-        touch "$filtered_urls"
-    fi
-    
-    # If no parameters found, copy a sample of all URLs
-    if [ ! -s "$filtered_urls" ] && [ -s "$urls_file" ]; then
-        print_warning "No parameterized URLs found, using sample of all URLs"
-        head -1000 "$urls_file" > "$filtered_urls"
-    fi
-    
-    # Enhanced vulnerability filtering with optimized patterns
-    declare -A vuln_patterns=(
-        ["xss"]="(\\?|&)(q|query|search|keyword|s|p|input|text|msg|message|comment|content|data|term|value|name|title|description|body|html|script)="
-        ["openredirect"]="(\\?|&)(url|redirect|return|next|continue|r|redir|goto|location|target|dest|destination|forward|link|href|src|path|uri)="
-        ["lfi"]="(\\?|&)(file|path|page|include|dir|folder|template|document|load|read|view|show|display|get|fetch|open|cat|download|upload)="
-        ["sqli"]="(\\?|&)(id|user|admin|login|page|cat|category|edit|delete|view|select|report|search|filter|sort|order|limit|offset|count|group|where|having|union)="
-        ["ssrf"]="(\\?|&)(url|uri|path|continue|window|next|data|reference|site|html|val|validate|domain|callback|return|page|feed|host|port|to|out|view|dir|show|navigation|open|fetch|proxy|redirect|ping|connect|request|get|post)="
-        ["rce"]="(\\?|&)(cmd|command|exec|execute|ping|system|shell|bash|sh|powershell|ps|run|call|invoke|eval|function|method|action|do|perform|launch)="
-        ["xxe"]="(\\?|&)(xml|feed|soap|rest|api|upload|import|export|parse|process|load|file|document|content|data|input|source|stream|reader)="
-    )
-    
-    # Special handling for XSS with Gxss and kxss
-    if command_exists "Gxss" && command_exists "kxss"; then
-        print_status "Filtering URLs for potential XSS endpoints (using Gxss+kxss)..."
-        if timeout 120 bash -c "cat '$filtered_urls' | Gxss 2>/dev/null | kxss 2>/dev/null | grep -oP '^URL: \\K\\S+' 2>/dev/null | sed 's/=.*/=/' | sort -u > '$OUTPUT_DIR/xss_endpoints.txt'"; then
-            : # Success
-        else
-            run_parallel_filter "$filtered_urls" "xss" "${vuln_patterns[xss]}" &
-        fi
-    else
-        run_parallel_filter "$filtered_urls" "xss" "${vuln_patterns[xss]}" &
-    fi
-    
-    # Run other filters in parallel with optimized patterns
-    for vuln_type in openredirect lfi sqli ssrf rce xxe; do
-        run_parallel_filter "$filtered_urls" "$vuln_type" "${vuln_patterns[$vuln_type]}" &
-    done
-    
-    # Wait for all background jobs to complete with progress indication
-    print_status "Waiting for parallel filtering to complete..."
-    local job_count=$(jobs -r | wc -l)
-    local wait_time=0
-    local max_wait=300  # 5 minutes max wait
-    
-    while [ $(jobs -r | wc -l) -gt 0 ] && [ $wait_time -lt $max_wait ]; do
-        local current_jobs=$(jobs -r | wc -l)
-        echo -ne "\rFiltering in progress... $current_jobs jobs remaining (${wait_time}s)"
-        sleep 2
-        wait_time=$((wait_time + 2))
-    done
-    echo
-    
-    # Kill any remaining jobs if they exceed timeout
-    if [ $(jobs -r | wc -l) -gt 0 ]; then
-        print_warning "Some filtering jobs exceeded timeout, terminating..."
-        jobs -p | xargs -r kill 2>/dev/null
-        sleep 2
-        jobs -p | xargs -r kill -9 2>/dev/null
-    fi
-    
-    wait 2>/dev/null || true
-    
-    # Clean up temporary file
-    rm -f "$filtered_urls"
-    
-    # Report results with enhanced statistics
-    print_status "Vulnerability filtering summary:"
-    local total_found=0
-    
-    for vuln_type in xss openredirect lfi sqli ssrf rce xxe; do
-        local file="$OUTPUT_DIR/${vuln_type}_endpoints.txt"
-        if [ -f "$file" ]; then
-            local count=$(wc -l < "$file" 2>/dev/null || echo "0")
-            if [ "$count" -gt 0 ]; then
-                print_success "Found $count potential $vuln_type endpoints"
-                total_found=$((total_found + count))
-                
-                # Show a sample if count is reasonable
-                if [ "$count" -le 5 ] && [ "$count" -gt 0 ]; then
-                    echo "  Sample endpoints:"
-                    head -"$count" "$file" | sed 's/^/    - /'
-                elif [ "$count" -gt 5 ]; then
-                    echo "  Sample endpoints:"
-                    head -3 "$file" | sed 's/^/    - /'
-                    echo "    ... and $((count - 3)) more"
-                fi
-            else
-                print_status "Found $count potential $vuln_type endpoints"
-            fi
-        fi
-    done
-    
-    echo
-    if [ "$total_found" -gt 0 ]; then
-        print_success "Total potential vulnerable endpoints: $total_found"
-    else
-        print_warning "No potential vulnerable endpoints found - this could indicate:"
-        echo "  - The target has good security practices"
-        echo "  - Limited URL discovery"
-        echo "  - URLs require authentication"
-        echo "  - Consider manual testing of key endpoints"
-    fi
-}
-
-# Function to generate summary report
-generate_report() {
-    local report_file="$OUTPUT_DIR/vulnerability_report.txt"
-    local html_report="$OUTPUT_DIR/vulnerability_report.html"
-    
-    print_progress "Generating vulnerability assessment report"
-    
-    # Text report
-    {
-        echo "============================================"
-        echo "Web Application Vulnerability Assessment Report"
-        echo "Generated: $(date)"
-        echo "Target: $1"
-        echo "============================================"
-        echo
-        echo "SUMMARY:"
-        echo "--------"
-        
-        for vuln_type in xss openredirect lfi sqli ssrf rce xxe; do
-            local file="$OUTPUT_DIR/${vuln_type}_endpoints.txt"
-            if [ -f "$file" ]; then
-                local count=$(wc -l < "$file" 2>/dev/null || echo "0")
-                echo "$(echo $vuln_type | tr '[:lower:]' '[:upper:]') endpoints: $count"
-            fi
-        done
-        
-        echo
-        echo "DETAILED FINDINGS:"
-        echo "------------------"
-        
-        for vuln_type in xss openredirect lfi sqli ssrf rce xxe; do
-            local file="$OUTPUT_DIR/${vuln_type}_endpoints.txt"
-            local vuln_name=""
-            case $vuln_type in
-                xss) vuln_name="Cross-Site Scripting (XSS)" ;;
-                openredirect) vuln_name="Open Redirect" ;;
-                lfi) vuln_name="Local File Inclusion (LFI)" ;;
-                sqli) vuln_name="SQL Injection" ;;
-                ssrf) vuln_name="Server-Side Request Forgery (SSRF)" ;;
-                rce) vuln_name="Remote Code Execution (RCE)" ;;
-                xxe) vuln_name="XML External Entity (XXE)" ;;
-            esac
-            
-            if [ -f "$file" ] && [ -s "$file" ]; then
-                echo
-                echo "=== $vuln_name ==="
-                head -20 "$file"
-                local total=$(wc -l < "$file")
-                if [ "$total" -gt 20 ]; then
-                    echo "... and $((total - 20)) more endpoints"
-                fi
-            fi
-        done
-    } > "$report_file"
-    
-    # HTML report
-    {
-        echo "<!DOCTYPE html>"
-        echo "<html><head><title>Vulnerability Assessment Report</title>"
-        echo "<style>body{font-family:Arial,sans-serif;margin:20px;} .vuln{margin:20px 0;} .count{font-weight:bold;color:#d63384;} .endpoint{background:#f8f9fa;padding:5px;margin:2px 0;border-left:3px solid #0d6efd;}</style>"
-        echo "</head><body>"
-        echo "<h1>Web Application Vulnerability Assessment Report</h1>"
-        echo "<p><strong>Target:</strong> $1</p>"
-        echo "<p><strong>Generated:</strong> $(date)</p>"
-        
-        for vuln_type in xss openredirect lfi sqli ssrf rce xxe; do
-            local file="$OUTPUT_DIR/${vuln_type}_endpoints.txt"
-            local vuln_name=""
-            case $vuln_type in
-                xss) vuln_name="Cross-Site Scripting (XSS)" ;;
-                openredirect) vuln_name="Open Redirect" ;;
-                lfi) vuln_name="Local File Inclusion (LFI)" ;;
-                sqli) vuln_name="SQL Injection" ;;
-                ssrf) vuln_name="Server-Side Request Forgery (SSRF)" ;;
-                rce) vuln_name="Remote Code Execution (RCE)" ;;
-                xxe) vuln_name="XML External Entity (XXE)" ;;
-            esac
-            
-            if [ -f "$file" ] && [ -s "$file" ]; then
-                local count=$(wc -l < "$file")
-                echo "<div class='vuln'>"
-                echo "<h2>$vuln_name <span class='count'>($count endpoints)</span></h2>"
-                head -10 "$file" | while IFS= read -r line; do
-                    echo "<div class='endpoint'>$line</div>"
-                done
-                if [ "$count" -gt 10 ]; then
-                    echo "<p><em>... and $((count - 10)) more endpoints</em></p>"
-                fi
-                echo "</div>"
-            fi
-        done
-        
-        echo "</body></html>"
-    } > "$html_report"
-    
-    print_success "Reports generated: $report_file and $html_report"
-}
-
-# Function to run tests with enhanced feedback
-run_tests() {
-    print_status "Running comprehensive tests with progress tracking..."
-    local test_count=0
-    local passed_count=0
-    
-    local test_urls=(
-        "https://example.com"
-        "https://httpbin.org"
-        "https://jsonplaceholder.typicode.com"
-    )
-    
-    # Test URL validation functions
-    print_status "[1/4] Testing URL validation functions..."
-    for test_url in "${test_urls[@]}"; do
-        test_count=$((test_count + 1))
-        echo -ne "  Testing $test_url... "
-        
-        local normalized=$(normalize_url "$test_url")
-        if validate_url "$normalized"; then
-            echo -e "${GREEN}✓${NC}"
-            passed_count=$((passed_count + 1))
-        else
-            echo -e "${RED}✗${NC}"
-            print_error "URL validation test failed for $test_url"
-        fi
-    done
-    
-    # Test required tools availability
-    print_status "[2/4] Testing tool availability..."
-    local required_tools=("katana" "gf" "uro" "waybackurls" "gau" "subfinder" "httpx")
-    local available_tools=0
-    
-    for tool in "${required_tools[@]}"; do
-        test_count=$((test_count + 1))
-        echo -ne "  Checking $tool... "
-        
-        if command_exists "$tool"; then
-            echo -e "${GREEN}✓${NC}"
-            available_tools=$((available_tools + 1))
-            passed_count=$((passed_count + 1))
-        else
-            echo -e "${YELLOW}⚠${NC}"
-        fi
-    done
-    
-    # Test pattern validation
-    print_status "[3/4] Testing regex pattern validation..."
-    local test_patterns=(
-        "(\\?|&)(q|search)="
-        "[?&][a-zA-Z]+="
-        "^https?://"
-    )
-    
-    for pattern in "${test_patterns[@]}"; do
-        test_count=$((test_count + 1))
-        echo -ne "  Testing pattern '$pattern'... "
-        
-        if validate_pattern "$pattern"; then
-            echo -e "${GREEN}✓${NC}"
-            passed_count=$((passed_count + 1))
-        else
-            echo -e "${RED}✗${NC}"
-        fi
-    done
-    
-    # Test file operations
-    print_status "[4/4] Testing file operations..."
-    local test_dir="$OUTPUT_DIR/test"
-    mkdir -p "$test_dir"
-    
-    # Test file creation
-    test_count=$((test_count + 1))
-    echo -ne "  Testing file creation... "
-    if echo "test" > "$test_dir/test.txt" 2>/dev/null; then
-        echo -e "${GREEN}✓${NC}"
-        passed_count=$((passed_count + 1))
-    else
-        echo -e "${RED}✗${NC}"
-    fi
-    
-    # Test file cleanup
-    rm -rf "$test_dir" 2>/dev/null
-    
-    # Display results summary
-    echo
-    print_status "Test Results Summary:"
-    echo "  Total tests: $test_count"
-    echo -e "  Passed: ${GREEN}$passed_count${NC}"
-    echo -e "  Failed: ${RED}$((test_count - passed_count))${NC}"
-    echo -e "  Available tools: ${GREEN}$available_tools${NC}/${#required_tools[@]}"
-    
-    local success_rate=$((passed_count * 100 / test_count))
-    if [ "$success_rate" -ge 80 ]; then
-        print_success "Test suite passed with $success_rate% success rate"
-        return 0
-    else
-        print_warning "Test suite completed with $success_rate% success rate"
-        return 1
-    fi
-}
-
-# Function to cleanup with enhanced error handling
-cleanup() {
-    print_status "Cleaning up temporary files and processes..."
-    
-    # Kill any remaining background processes
-    jobs -p | xargs -r kill 2>/dev/null || true
-    sleep 1
-    jobs -p | xargs -r kill -9 2>/dev/null || true
-    
-    # Clean up temporary files and directories
-    rm -rf "$OUTPUT_DIR/temp" "$OUTPUT_DIR/temp_urls.txt" "$OUTPUT_DIR/filtered_urls.txt" 2>/dev/null || true
-    
-    # Preserve scan results by default, only clean temp files
-    # Set CLEANUP_ALL=true in environment to remove all files
-    if [ "${CLEANUP_ALL:-false}" = "true" ]; then
-        rm -f "$OUTPUT_DIR/all_urls.txt" 2>/dev/null || true
-        print_status "All temporary and result files cleaned up"
-    fi
-}
-
-# Function to display usage
-usage() {
-    echo -e "${WHITE}╔═══════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║     Web Application Vulnerability Scanner ║${NC}"
-    echo -e "${WHITE}║              Enhanced Version             ║${NC}"
-    echo -e "${WHITE}╚═══════════════════════════════════════════╝${NC}"
-    echo
-    echo -e "${CYAN}USAGE:${NC}"
-    echo "  $(basename "$0") [OPTIONS]"
-    echo
-    echo -e "${YELLOW}OPTIONS:${NC}"
-    echo -e "  ${GREEN}-u, --url URL${NC}        Target URL or domain to scan"
-    echo -e "  ${GREEN}-t, --test${NC}           Run comprehensive tests only"
-    echo -e "  ${GREEN}-i, --install${NC}        Install/check required tools only"
-    echo -e "  ${GREEN}-h, --help${NC}           Show this help message"
-    echo
-    echo -e "${CYAN}EXAMPLES:${NC}"
-    echo -e "  ${WHITE}Basic scan:${NC}"
-    echo "    $(basename "$0") -u example.com"
-    echo "    $(basename "$0") --url https://example.com"
-    echo
-    echo -e "  ${WHITE}Maintenance:${NC}"
-    echo "    $(basename "$0") --test        # Run system tests"
-    echo "    $(basename "$0") --install     # Install missing tools"
-    echo
-    echo -e "${PURPLE}FEATURES:${NC}"
-    echo "  • Parallel URL discovery from multiple sources"
-    echo "  • Advanced vulnerability pattern matching"
-    echo "  • Support for 7 vulnerability types (XSS, SQLi, etc.)"
-    echo "  • Enhanced error handling and progress tracking"
-    echo "  • Detailed HTML and text reporting"
-    echo
-    echo -e "${YELLOW}OUTPUT:${NC}"
-    echo "  Results are saved to: ./output/"
-    echo "  • Individual endpoint files per vulnerability type"
-    echo "  • Comprehensive HTML and text reports"
-    echo "  • Raw URL collection for manual testing"
-}
-
-# Main function
-main() {
-    local website_input=""
-    local test_mode=false
-    local install_mode=false
-    
-    # Parse command line arguments
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -u|--url)
-                website_input="$2"
-                shift 2
-                ;;
-            -t|--test)
-                test_mode=true
-                shift
-                ;;
-            -i|--install)
-                install_mode=true
-                shift
-                ;;
-            -h|--help)
-                usage
-                exit 0
-                ;;
-            *)
-                print_error "Unknown option: $1"
-                usage
-                exit 1
-                ;;
-        esac
-    done
-    
-    # Set total steps for progress tracking
-    if $test_mode; then
-        TOTAL_STEPS=2
-    elif $install_mode; then
-        TOTAL_STEPS=1
-    else
-        TOTAL_STEPS=6
-    fi
-    
-    # Create output directory
-    mkdir -p "$OUTPUT_DIR"
-    
-    # Handle different modes
-    if $test_mode; then
-        print_status "Running in test mode"
-        run_tests
-        return $?
-    fi
-    
-    if $install_mode; then
-        install_tools
-        return $?
-    fi
-    
-    # Enhanced interactive mode if no URL provided
-    if [ -z "$website_input" ]; then
-        echo -e "${CYAN}╔═══════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║     Web Application Vulnerability Scanner ║${NC}"
-        echo -e "${CYAN}║              Enhanced Version             ║${NC}"
-        echo -e "${CYAN}╚═══════════════════════════════════════════╝${NC}"
-        echo
-        echo -e "${WHITE}Features:${NC}"
-        echo "  • Parallel URL discovery from multiple sources"
-        echo "  • Advanced vulnerability pattern matching"
-        echo "  • Enhanced error handling and timeouts"
-        echo "  • Progress tracking and detailed reporting"
-        echo
-        echo -e "${YELLOW}Supported vulnerability types:${NC}"
-        echo "  XSS, Open Redirect, LFI, SQLi, SSRF, RCE, XXE"
-        echo
-        
-        while [ -z "$website_input" ]; do
-            read -p "Enter the website URL or domain: " website_input
-            
-            if [ -z "$website_input" ]; then
-                print_warning "URL is required. Please try again or use Ctrl+C to exit."
-            fi
-        done
-    fi
-    
-    # Normalize and validate URL
-    local website_url=$(normalize_url "$website_input")
-    
-    if ! validate_url "$website_url"; then
+    if [[ ! $REPLY =~ ^[Yy]$ ]]
+    then
         exit 1
     fi
-    
-    print_success "Target URL: $website_url"
-    
-    # Set trap for cleanup with enhanced signal handling
-    trap 'cleanup; exit 130' INT TERM
-    trap 'cleanup' EXIT
-    
-    # Main execution flow
-    print_progress "Installing/checking required tools"
-    install_tools
-    
-    print_progress "Gathering URLs from multiple sources"
-    gather_urls "$website_url"
-    
-    print_progress "Filtering URLs for vulnerabilities"
-    filter_vulnerabilities
-    
-    print_progress "Generating comprehensive report"
-    generate_report "$website_url"
-    
-    print_progress "Displaying results summary"
-    echo
-    echo -e "${WHITE}╔═══════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║          SCAN COMPLETED SUCCESSFULLY!     ║${NC}"
-    echo -e "${WHITE}╚═══════════════════════════════════════════╝${NC}"
-    echo
-    
-    # Display detailed results summary
-    echo -e "${CYAN}📊 Results Summary:${NC}"
-    local total_endpoints=0
-    local file_count=0
-    
-    for file in "$OUTPUT_DIR"/*.txt "$OUTPUT_DIR"/*.html; do
-        if [ -f "$file" ]; then
-            file_count=$((file_count + 1))
-            local basename_file=$(basename "$file")
-            local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "0K")
+    mkdir -p "$baseDir"
+fi
+
+if [ "${#domainargs[@]}" -ne 0 ]
+then
+    IFS=', ' read -r -a DOMAINS <<< "${domainargs[@]}"
+else
+    read -r -p "[?] What's the target domain(s)? E.g. \"domain.com,domain2.com\". DOMAIN: " domainsresponse
+    IFS=', ' read -r -a DOMAINS <<< "$domainsresponse"  
+fi
+
+if [ -z "$toolsDir" ]
+then
+    echo "[i] \$toolsDir variable not defined in .env, defaulting to /opt..."
+    toolsDir="/opt"
+fi
+
+echo "$PATH" | grep -q "$HOME/go/bin" || export PATH=$PATH:$HOME/go/bin
+
+if command -v nuclei &> /dev/null # Very crude dependency check :D
+then
+	echo "[*] Dependencies found."
+else
+    echo "[*] Dependencies not found, running install script..."
+    bash "$scriptDir/setup.sh" -t "$toolsDir"
+fi
+
+cd "$baseDir" || { echo "Something went wrong"; exit 1; }
+
+# Enable logging for stdout and stderr (timestamp format [dd/mm/yy hh:mm:ss])
+LOG_FILE="./BugBountyScanner-$(date +'%Y%m%d-%T').log"
+exec > >(while read -r line; do printf '%s %s\n' "[$(date +'%D %T')]" "$line" | tee -a "${LOG_FILE}"; done) 2>&1
+
+echo "[*] STARTING RECON."
+notify "Starting recon on *${#DOMAINS[@]}* domains."
+
+for DOMAIN in "${DOMAINS[@]}"
+do
+    mkdir -p "$DOMAIN"
+    cd "$DOMAIN" || { echo "Something went wrong"; exit 1; }
+
+    cp -r "$scriptDir/dist" .
+
+    echo "[*] RUNNING RECON ON $DOMAIN."
+    notify "Starting recon on $DOMAIN. Enumerating subdomains with Amass..."
+
+    if [ ! -f "domains-$DOMAIN.txt" ] || [ "$overwrite" = true ]
+    then
+        echo "[*] RUNNING AMASS..."
+        amass enum --passive -d "$DOMAIN" -o "domains-$DOMAIN.txt"
+        notify "Amass completed! Identified *$(wc -l < "domains-$DOMAIN.txt")* subdomains. Resolving IP addresses..."
+    else
+        echo "[-] SKIPPING AMASS"
+    fi
+
+    if [ ! -f "ip-addresses-$DOMAIN.txt" ] || [ "$overwrite" = true ]
+    then
+        echo "[*] RESOLVING IP ADDRESSES FROM HOSTS..."
+        while read -r hostname; do
+            dig "$hostname" +short >> "dig.txt"
+        done < "domains-$DOMAIN.txt"
+        grep -o '[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}' "dig.txt" | sort -u > "ip-addresses-$DOMAIN.txt" && rm "dig.txt"
+        notify "Resolving done! Enriching *$(wc -l < "ip-addresses-$DOMAIN.txt")* IP addresses with Shodan data..."
+    else
+        echo "[-] SKIPPING RESOLVING HOST IP ADDRESSES"
+    fi
+
+    if [ ! -f "nrich-$DOMAIN.txt" ] || [ "$overwrite" = true ]
+    then
+        echo "[*] ENRICHING IP ADDRESS DATA WITH SHODAN..."
+        nrich "ip-addresses-$DOMAIN.txt" > "nrich-$DOMAIN.txt"
+        notify "IP addresses enriched! Make sure to give that a manual look. Getting live domains with HTTPX..."
+    else
+        echo "[-] SKIPPING IP ENRICHMENT"
+    fi
+
+    if [ ! -f "livedomains-$DOMAIN.txt" ] || [ "$overwrite" = true ]
+    then
+        echo "[*] RUNNING HTTPX..."
+        httpx -silent -no-color -l "domains-$DOMAIN.txt" -title -content-length -web-server -status-code -ports 80,8080,443,8443 -threads 25 -o "httpx-$DOMAIN.txt"
+        cut -d' ' -f1 < "httpx-$DOMAIN.txt" | sort -u > "livedomains-$DOMAIN.txt"
+        notify "HTTPX completed. *$(wc -l < "livedomains-$DOMAIN.txt")* endpoints seem to be alive. Checking for hijackable subdomains with SubJack..."
+    else
+        echo "[-] SKIPPING HTTPX"
+    fi
+
+    if [ ! -f "subjack-$DOMAIN.txt" ] || [ "$overwrite" = true ]
+    then
+        echo "[*] RUNNING SUBJACK..."
+        subjack -w "domains-$DOMAIN.txt" -t 100 -c "$toolsDir/subjack/fingerprints.json" -o "subjack-$DOMAIN.txt" -a
+        if [ -f "subjack-$DOMAIN.txt" ]; then
+            echo "[+] HIJACKABLE SUBDOMAINS FOUND!"
+            notify "SubJack completed. One or more hijackable subdomains found!"
+            notify "Hijackable domains: $(cat "subjack-$DOMAIN.txt")"
+            notify "Gathering live page screenshots with aquatone..."
+        else
+            echo "[-] NO HIJACKABLE SUBDOMAINS FOUND."
+            notify "No hijackable subdomains found. Gathering live page screenshots with aquatone..."
+        fi
+    else
+        echo "[-] SKIPPING SUBJACK"
+    fi
+
+    if [ ! -f "aquatone_report.html" ] || [ "$overwrite" = true ]
+    then
+        echo "[*] RUNNING AQUATONE..."
+        cat livedomains-$DOMAIN.txt | aquatone -ports medium
+        generate_screenshot_report "$DOMAIN"
+        notify "Aquatone completed! Took *$(find screenshots/* -maxdepth 0 | wc -l)* screenshots. Getting Wayback Machine path list with GAU..."
+    else
+        echo "[-] SKIPPING AQUATONE"
+    fi
+
+    if [ ! -f "WayBack-$DOMAIN.txt" ] || [ "$overwrite" = true ]
+    then
+        echo "[*] RUNNING GAU..."
+        # Get ONLY Wayback URLs with parameters to prevent clutter
+        gau -subs -providers wayback -o "gau-$DOMAIN.txt" "$DOMAIN"
+        grep '?' < "gau-$DOMAIN.txt" | qsreplace -a > "WayBack-$DOMAIN.txt"
+        rm "gau-$DOMAIN.txt"
+        notify "GAU completed. Got *$(wc -l < "WayBack-$DOMAIN.txt")* paths."
+    else
+        echo "[-] SKIPPING GAU"
+    fi
+
+    if [ "$thorough" = true ] ; then
+        if [ ! -f "nuclei-$DOMAIN.txt" ] || [ "$overwrite" = true ]
+        then
+            echo "[*] RUNNING NUCLEI..."
+            notify "Detecting known vulnerabilities with Nuclei..."
+            nuclei -c 150 -l "livedomains-$DOMAIN.txt" -severity low,medium,high,critical -etags "intrusive" -o "nuclei-$DOMAIN.txt"
             
-            if [[ "$file" == *.txt ]] && [[ ! "$file" == *"report.txt" ]] && [[ ! "$file" == *"all_urls.txt" ]]; then
-                local count=$(wc -l < "$file" 2>/dev/null || echo "0")
-                total_endpoints=$((total_endpoints + count))
-                
-                if [ "$count" -gt 0 ]; then
-                    echo -e "  ${GREEN}✓${NC} $basename_file: $count entries ($size)"
+            if [ -f "nuclei-$DOMAIN.txt" ]
+            then
+                highIssues="$(grep -c 'high' < "nuclei-$DOMAIN.txt")"
+                critIssues="$(grep -c 'critical' < "nuclei-$DOMAIN.txt")"
+                if [ "$critIssues" -gt 0 ]
+                then
+                    notify "Nuclei completed. Found *$(wc -l < "nuclei-$DOMAIN.txt")* (potential) issues, of which *$critIssues* are critical, and *$highIssues* are high severity. Finding temporary files with ffuf.."
+                elif [ "$highIssues" -gt 0 ]
+                then
+                    notify "Nuclei completed. Found *$(wc -l < "nuclei-$DOMAIN.txt")* (potential) issues, of which *$highIssues* are high severity. Finding temporary files with ffuf..."
                 else
-                    echo -e "  ${YELLOW}•${NC} $basename_file: $count entries ($size)"
+                    notify "Nuclei completed. Found *$(wc -l < "nuclei-$DOMAIN.txt")* (potential) issues, of which none are critical or high severity. Finding temporary files with ffuf..."
                 fi
             else
-                echo -e "  ${BLUE}📄${NC} $basename_file ($size)"
+                notify "Nuclei completed. No issues found. Finding temporary files with ffuf..."
             fi
+        else
+            echo "[-] SKIPPING NUCLEI"
         fi
-    done
-    
-    echo
-    echo -e "${WHITE}📈 Statistics:${NC}"
-    echo -e "  Total potential endpoints found: ${GREEN}$total_endpoints${NC}"
-    echo -e "  Output files generated: ${BLUE}$file_count${NC}"
-    echo -e "  Scan target: ${CYAN}$website_url${NC}"
-    echo -e "  Scan completed: ${PURPLE}$(date)${NC}"
-    
-    if [ "$total_endpoints" -gt 0 ]; then
-        echo
-        echo -e "${GREEN}🎯 Next steps:${NC}"
-        echo "  1. Review the generated reports in: $OUTPUT_DIR/"
-        echo "  2. Prioritize testing based on endpoint counts"
-        echo "  3. Use tools like Burp Suite or OWASP ZAP for testing"
-        echo "  4. Consider manual testing for complex scenarios"
-    fi
-    
-    print_success "Vulnerability assessment completed for $website_url"
-}
 
-# Execute main function if script is run directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+        if [ ! -d "ffuf" ] || [ "$overwrite" = true ]
+        then
+                echo "[*] RUNNING FFUF..."
+		mkdir ffuf
+		cd ffuf || { echo "Something went wrong"; exit 1; }
+
+		while read -r dname;
+		do
+    			filename=$(echo "${dname##*/}" | sed 's/:/./g')
+    			ffuf -w "$toolsDir/wordlists/tempfiles.txt" -u "$dname/FUZZ" -mc 200-299 -maxtime 180 -o "ffuf-$filename.csv" -of csv
+		done < "../livedomains-$DOMAIN.txt"
+
+        # Remove all files with only a header row
+        find . -type f -size -1c -delete
+
+        # Count the number of files (lines in the ffuf files, excluding the header row for each file) and sum into variable
+        ffufFiles=$(find . -type f -exec wc -l {} + | sed '$d' | awk '{sum+=$1-1} END{print sum}')
+
+		if [ "$ffufFiles" -gt 0 ]
+        then
+    			notify "FFUF completed. Got *$ffufFiles* files. Spidering paths with GoSpider..."
+    			cd .. || { echo "Something went wrong"; exit 1; }
+		else
+    			notify "FFUF completed. No temporary files identified. Spidering paths with GoSpider..."
+    			cd .. || { echo "Something went wrong"; exit 1; }
+    			rm -rf ffuf
+		fi
+
+            fi   
+        else
+            echo "[-] SKIPPING ffuf"
+        fi
+
+        if [ ! -f "paths-$DOMAIN.txt" ] || [ "$overwrite" = true ]
+        then
+            echo "[*] RUNNING GOSPIDER..."
+            # Spider for unique URLs, filter duplicate parameters
+            gospider -S "livedomains-$DOMAIN.txt" -o GoSpider -t 2 -c 4 -d 3 -m 3 --no-redirect --blacklist jpg,jpeg,gif,css,tif,tiff,png,ttf,woff,woff2,ico,svg
+            cat GoSpider/* | grep -o -E "(([a-zA-Z][a-zA-Z0-9+-.]*\:\/\/)|mailto|data\:)([a-zA-Z0-9\.\&\/\?\:@\+-\_=#%;,])*" | sort -u | qsreplace -a | grep "$DOMAIN" > "tmp-GoSpider-$DOMAIN.txt"
+            rm -rf GoSpider
+            notify "GoSpider completed. Crawled *$(wc -l < "tmp-GoSpider-$DOMAIN.txt")* endpoints. Getting interesting endpoints and parameters..."
+
+            ## Enrich GoSpider list with parameters from GAU/WayBack. Disregard new GAU endpoints to prevent clogging with unreachable endpoints (See Issue #24).
+            # Get only endpoints from GoSpider list (assumed to be live), disregard parameters, and append ? for grepping
+            sed "s/\?.*//" "tmp-GoSpider-$DOMAIN.txt" | sort -u | sed -e 's/$/\?/' > "tmp-LivePathsQuery-$DOMAIN.txt"
+            # Find common endpoints containing (hopefully new and interesting) parameters from GAU/Wayback list
+            grep -f "tmp-LivePathsQuery-$DOMAIN.txt" "WayBack-$DOMAIN.txt" > "tmp-LiveWayBack-$DOMAIN.txt"
+            # Merge new parameters with GoSpider list and get only unique endpoints
+            cat "tmp-LiveWayBack-$DOMAIN.txt" "tmp-GoSpider-$DOMAIN.txt" | sort -u | qsreplace -a > "paths-$DOMAIN.txt"
+            rm "tmp-LivePathsQuery-$DOMAIN.txt" "tmp-LiveWayBack-$DOMAIN.txt" "tmp-GoSpider-$DOMAIN.txt"
+        else
+            echo "[-] SKIPPING GOSPIDER"
+        fi
+
+        if [ ! -d "check-manually" ] || [ "$overwrite" = true ]
+        then
+            echo "[*] GETTING INTERESTING PARAMETERS WITH GF..."
+            mkdir "check-manually"
+            # Use GF to identify "suspicious" endpoints that may be vulnerable (automatic checks below)
+            gf ssrf < "paths-$DOMAIN.txt" > "check-manually/server-side-request-forgery.txt"
+            gf xss < "paths-$DOMAIN.txt" > "check-manually/cross-site-scripting.txt"
+            gf redirect < "paths-$DOMAIN.txt" > "check-manually/open-redirect.txt"
+            gf rce < "paths-$DOMAIN.txt" > "check-manually/rce.txt"
+            gf idor < "paths-$DOMAIN.txt" > "check-manually/insecure-direct-object-reference.txt"
+            gf sqli < "paths-$DOMAIN.txt" > "check-manually/sql-injection.txt"
+            gf lfi < "paths-$DOMAIN.txt" > "check-manually/local-file-inclusion.txt"
+            gf ssti < "paths-$DOMAIN.txt" > "check-manually/server-side-template-injection.txt"
+            notify "Done! Gathered a total of *$(wc -l < "paths-$DOMAIN.txt")* paths, of which *$(cat check-manually/* | wc -l)* possibly exploitable. Testing for Server-Side Template Injection..."
+        else
+            echo "[-] SKIPPING GF"
+        fi
+
+        if [ ! -f "potential-ssti.txt" ] || [ "$overwrite" = true ]
+        then
+            echo "[*] TESTING FOR SSTI..."
+            qsreplace "BugBountyScanner{{9*9}}" < "check-manually/server-side-template-injection.txt" | \
+            xargs -I % -P 100 sh -c 'curl -s "%" 2>&1 | grep -q "BugBountyScanner81" && echo "[+] Found endpoint likely to be vulnerable to SSTI: %" && echo "%" >> potential-ssti.txt'
+            if [ -f "potential-ssti.txt" ]; then
+                notify "Identified *$(wc -l < potential-ssti.txt)* endpoints potentially vulnerable to SSTI! Testing for Local File Inclusion..."
+            else
+                notify "No SSTI found. Testing for Local File Inclusion..."
+            fi
+        else
+            echo "[-] SKIPPING TEST FOR SSTI"
+        fi
+
+        if [ ! -f "potential-lfi.txt" ] || [ "$overwrite" = true ]
+        then
+            echo "[*] TESTING FOR (*NIX) LFI..."
+            qsreplace "/etc/passwd" < "check-manually/local-file-inclusion.txt" | \
+            xargs -I % -P 100 sh -c 'curl -s "%" 2>&1 | grep -q "root:x:" && echo "[+] Found endpoint likely to be vulnerable to LFI: %" && echo "%" >> potential-lfi.txt'
+            if [ -f "potential-lfi.txt" ]; then
+                notify "Identified *$(wc -l < potential-lfi.txt)* endpoints potentially vulnerable to LFI! Testing for Open Redirections..."
+            else
+                notify "No LFI found. Testing for Open Redirections..."
+            fi
+        else
+            echo "[-] SKIPPING TEST FOR (*NIX) LFI"
+        fi
+
+        if [ ! -f "potential-or.txt" ] || [ "$overwrite" = true ]
+        then
+            echo "[*] TESTING FOR OPEN REDIRECTS..."
+            qsreplace "https://www.testing123.com" < "check-manually/open-redirect.txt" | \
+            xargs -I % -P 100 sh -c 'curl -s "%" 2>&1 | grep -q "Location: https://www.testing123.com" && echo "[+] Found endpoint likely to be vulnerable to OR: %" && echo "%" >> potential-or.txt'
+            if [ -f "potential-or.txt" ]; then
+                notify "Identified *$(wc -l < potential-or.txt)* endpoints potentially vulnerable to open redirects! Resolving IP Addresses..."
+            else
+                notify "No open redirects found. Starting Nmap for *$(wc -l < "ip-addresses-$DOMAIN.txt")* IP addresses..."
+            fi
+        else
+            echo "[-] SKIPPING TEST FOR OPEN REDIRECTS"
+        fi
+
+        if [ ! -d "nmap" ] || [ "$overwrite" = true ]
+        then
+            echo "[*] RUNNING NMAP (TOP 1000 TCP)..."
+            mkdir nmap
+            nmap -T4 -sV --open --source-port 53 --max-retries 3 --host-timeout 15m -iL "ip-addresses-$DOMAIN.txt" -oA nmap/nmap-tcp
+            grep Port < nmap/nmap-tcp.gnmap | cut -d' ' -f2 | sort -u > nmap/tcpips.txt
+            notify "Nmap TCP done! Identified *$(grep -c "Port" < "nmap/nmap-tcp.gnmap")* IPs with ports open. Starting Nmap UDP/SNMP scan for *$(wc -l < "nmap/tcpips.txt")* IP addresses..."
+
+            echo "[*] RUNNING NMAP (SNMP UDP)..."
+            nmap -T4 -sU -sV -p 161 --open --source-port 53 -iL nmap/tcpips.txt -oA nmap/nmap-161udp
+            rm nmap/tcpips.txt
+            notify "Nmap UDP done! Identified *$(grep "Port" < "nmap/nmap-161udp.gnmap" | grep -cv "filtered")* IPS with SNMP port open."
+        else
+            echo "[-] SKIPPING NMAP"
+        fi
+    
+
+    cd ..
+    echo "[+] DONE SCANNING $DOMAIN."
+    notify "Recon on $DOMAIN finished."
+
+done
+
+echo "[+] DONE! :D"
+notify "Recon finished! Go hack em!"
