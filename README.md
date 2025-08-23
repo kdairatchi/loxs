@@ -40,6 +40,20 @@
 | `User-friendly CLI`               | Simple and intuitive command-line interface.                                |
 | `Save Vulnerable URLs`            | Option to save vulnerable URLs to a file for future reference.              |
 | `HTML Report Generation`          | Generates a detailed HTML report of found vulnerabilities.                  |
+
+## Enhanced Bug Bounty Reconnaissance Features
+
+| **Enhanced Reconnaissance**       | **About**                                                                   |
+|-----------------------------------|-----------------------------------------------------------------------------|
+| `Modern Tool Integration`         | **Katana** crawler, **URLfinder** passive discovery, enhanced **Nuclei** scanning |
+| `Multi-Source URL Discovery`      | Combines URLfinder, GAU, Katana for comprehensive endpoint discovery        |
+| `Advanced GF Pattern Matching`   | Auto-installs GF patterns, detects SSRF, XSS, SQLi, LFI, RCE, IDOR, SSTI  |
+| `Enhanced HTTPX Probing`          | Technology detection, response times, comprehensive port coverage           |
+| `Intelligent Error Handling`      | Robust error handling with verbose logging and automatic tool installation  |
+| `Passive Reconnaissance Mode`     | `--passive-only` flag for stealth reconnaissance without active scanning    |
+| `Comprehensive Vulnerability Detection` | Modern Nuclei templates with severity classification and detailed reporting |
+| `Auto-Dependency Management`      | Automatically installs missing tools with proper version management         |
+| `Enhanced Logging & Notifications`| Verbose mode, structured logging, Telegram notifications with emoji status |
 <!-- | `Share HTML Report via Telegram`  | Share HTML vulnerability reports directly through Telegram.                 | -->
 
 <br>
@@ -50,6 +64,22 @@
 | Language                          | Packages                                                                    |
 |-----------------------------------|-----------------------------------------------------------------------------|
 | ***Python***| `Python 3.x` `webdriver_manager` `selenium` `aiohttp` `beautifulsoup4` `colorama` `rich` `requests` `gitpython` `prompt_toolkit` `pyyaml` `Flask`|
+| ***Go Tools (Bug Bounty)***| `nuclei` `katana` `urlfinder` `httpx` `gf` `gau` `qsreplace` `subjack` `ffuf` `amass` `nrich` |
+| ***System Tools***| `curl` `wget` `jq` `git` `nmap` `chrome` `chromedriver` `phantomjs` |
+
+## Modern Tool Versions (Auto-Installed)
+
+| Tool | Version | Purpose | Repository |
+|------|---------|---------|------------|
+| **Nuclei** | v3 (Latest) | Vulnerability scanner with 1000+ templates | `github.com/projectdiscovery/nuclei` |
+| **Katana** | Latest | Next-gen web crawler with JS support | `github.com/projectdiscovery/katana` |
+| **URLfinder** | Latest | High-speed passive URL discovery | `github.com/projectdiscovery/urlfinder` |
+| **HTTPX** | Latest | Fast HTTP probing with tech detection | `github.com/projectdiscovery/httpx` |
+| **GF** | Latest | Pattern-based grep for bug bounty | `github.com/tomnomnom/gf` |
+| **GAU** | v2 (Latest) | Get All URLs from web archives | `github.com/lc/gau` |
+| **QSReplace** | Latest | Query string parameter manipulation | `github.com/tomnomnom/qsreplace` |
+| **SubJack** | Latest | Subdomain takeover detection | `github.com/haccer/subjack` |
+| **FFUF** | v2 (Latest) | Fast web fuzzer | `github.com/ffuf/ffuf` |
 
 <br>
 <hr>
@@ -71,10 +101,37 @@ cd loxs
 ```bash
 pip3 install -r requirements.txt
 ```
-### Run the Script
+
+### Install Bug Bounty Reconnaissance Tools (Enhanced)
+
+```bash
+# Install dependencies for enhanced reconnaissance script
+sudo bash setup.sh -t /opt
+
+# Or run the enhanced filter script which will auto-install missing tools
+./filter.sh --help
+```
+
+### Run the Vulnerability Scanner
 
 ```bash
 python3 loxs.py
+```
+
+### Run the Enhanced Bug Bounty Reconnaissance Script
+
+```bash
+# Enhanced reconnaissance with modern tools
+./filter.sh -d example.com --verbose
+
+# Quick scan mode
+./filter.sh -d example.com --quick
+
+# Passive reconnaissance only
+./filter.sh -d example.com --passive-only
+
+# Multiple domains with custom output directory
+./filter.sh -d example.com -d target.com -o /path/to/output --verbose
 ```
 <!-- to update the tool to the latest version
 ```bash

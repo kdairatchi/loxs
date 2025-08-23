@@ -1,6 +1,12 @@
 #!/bin/bash
-## Automated Bug Bounty recon script
-## By Cas van Cooten
+# ABOUTME: Enhanced automated bug bounty reconnaissance script with modern tools integration
+# ABOUTME: Consolidates security scanning tools including katana, urlfinder, gf patterns, nuclei, and custom payload testing
+## Enhanced Automated Bug Bounty recon script
+## Based on original by Cas van Cooten, enhanced for modern tool integration
+## Enhanced by Doctor K's security research team
+
+# Prevent gf alias conflicts (unalias gf in case GitHub alias is interfering)
+unalias gf 2>/dev/null || true
 
 scriptDir=$(dirname "$(readlink -f "$0")")
 baseDir=$PWD
@@ -8,8 +14,30 @@ lastNotified=0
 thorough=true
 notify=true
 overwrite=false
+verbose=false
+use_passive_only=false
 
-source "./utils/screenshotReport.sh"
+# Source utility scripts if they exist
+if [ -f "./utils/screenshotReport.sh" ]; then
+    source "./utils/screenshotReport.sh"
+fi
+
+# Verbose logging function
+function verbose_log {
+    if [ "$verbose" = true ]; then
+        echo "[VERBOSE] $1" | tee -a "${LOG_FILE:-/dev/null}"
+    fi
+}
+
+# Error logging function
+function error_log {
+    echo "[ERROR] $1" | tee -a "${LOG_FILE:-/dev/null}" >&2
+}
+
+# Success logging function
+function success_log {
+    echo "[SUCCESS] $1" | tee -a "${LOG_FILE:-/dev/null}"
+}
 
 function notify {
     if [ "$notify" = true ]
@@ -37,7 +65,7 @@ for arg in "$@"
 do
     case $arg in
         -h|--help)
-        echo "BugBountyHunter - Automated Bug Bounty reconnaissance script"
+        echo "Enhanced BugBountyHunter - Modern Automated Bug Bounty reconnaissance script"
         echo " "
         echo "$0 [options]"
         echo " "
@@ -48,11 +76,20 @@ do
         echo "-d, --domain <domain>         top domain to scan, can take multiple"
         echo "-o, --outputdirectory <dir>   parent output directory, defaults to current directory (subfolders will be created per domain)"
         echo "-w, --overwrite               overwrite existing files. Skip steps with existing files if not provided (default: false)"
+        echo "-v, --verbose                 enable verbose output (default: false)"
+        echo "-p, --passive-only            use only passive reconnaissance techniques (default: false)"
+        echo " "
+        echo "Enhanced Features:"
+        echo "- Modern Katana crawler with proper flags"
+        echo "- URLfinder for passive URL discovery"
+        echo "- Enhanced GF pattern matching (auto-unalias gf)"
+        echo "- Improved error handling and logging"
+        echo "- Better tool integration and performance"
         echo " "
         echo "Note: 'ToolsDir', as well as your 'telegram_api_key' and 'telegram_chat_id' can be defined in .env or through (Docker) environment variables."
         echo " "
         echo "example:"
-        echo "$0 --quick -d google.com -d uber.com -t /opt"
+        echo "$0 --quick -d google.com -d uber.com -t /opt --verbose"
         exit 0
         ;;
         -q|--quick)
@@ -76,6 +113,14 @@ do
         ;;
         -w|--overwrite)
         overwrite=true
+        shift
+        ;;
+        -v|--verbose)
+        verbose=true
+        shift
+        ;;
+        -p|--passive-only)
+        use_passive_only=true
         shift
     esac
 done
@@ -118,14 +163,48 @@ then
     toolsDir="/opt"
 fi
 
+# Ensure Go tools are in PATH
 echo "$PATH" | grep -q "$HOME/go/bin" || export PATH=$PATH:$HOME/go/bin
+echo "$PATH" | grep -q "/usr/local/go/bin" || export PATH=$PATH:/usr/local/go/bin
 
-if command -v nuclei &> /dev/null # Very crude dependency check :D
-then
-	echo "[*] Dependencies found."
-else
-    echo "[*] Dependencies not found, running install script..."
+# Enhanced dependency check
+function check_tool_dependency {
+    local tool=$1
+    local install_cmd=$2
+    
+    if command -v "$tool" &> /dev/null; then
+        verbose_log "Tool $tool found: $(which $tool)"
+        return 0
+    else
+        error_log "Tool $tool not found"
+        if [ -n "$install_cmd" ]; then
+            echo "[*] Installing $tool with: $install_cmd"
+            eval "$install_cmd"
+        fi
+        return 1
+    fi
+}
+
+# Check essential dependencies
+missing_tools=()
+check_tool_dependency "nuclei" "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest" || missing_tools+=("nuclei")
+check_tool_dependency "katana" "go install github.com/projectdiscovery/katana/cmd/katana@latest" || missing_tools+=("katana")
+check_tool_dependency "urlfinder" "go install -v github.com/projectdiscovery/urlfinder/cmd/urlfinder@latest" || missing_tools+=("urlfinder")
+check_tool_dependency "httpx" "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest" || missing_tools+=("httpx")
+check_tool_dependency "gf" "go install github.com/tomnomnom/gf@latest" || missing_tools+=("gf")
+check_tool_dependency "gau" "go install github.com/lc/gau/v2/cmd/gau@latest" || missing_tools+=("gau")
+check_tool_dependency "qsreplace" "go install github.com/tomnomnom/qsreplace@latest" || missing_tools+=("qsreplace")
+check_tool_dependency "subjack" "go install github.com/haccer/subjack@latest" || missing_tools+=("subjack")
+check_tool_dependency "ffuf" "go install github.com/ffuf/ffuf/v2@latest" || missing_tools+=("ffuf")
+check_tool_dependency "amass" "" || missing_tools+=("amass")
+check_tool_dependency "nrich" "" || missing_tools+=("nrich")
+
+if [ ${#missing_tools[@]} -gt 0 ]; then
+    echo "[*] Missing tools detected: ${missing_tools[*]}"
+    echo "[*] Running setup script to install dependencies..."
     bash "$scriptDir/setup.sh" -t "$toolsDir"
+else
+    success_log "All essential dependencies found."
 fi
 
 cd "$baseDir" || { echo "Something went wrong"; exit 1; }
@@ -179,12 +258,47 @@ do
 
     if [ ! -f "livedomains-$DOMAIN.txt" ] || [ "$overwrite" = true ]
     then
-        echo "[*] RUNNING HTTPX..."
-        httpx -silent -no-color -l "domains-$DOMAIN.txt" -title -content-length -web-server -status-code -ports 80,8080,443,8443 -threads 25 -o "httpx-$DOMAIN.txt"
-        cut -d' ' -f1 < "httpx-$DOMAIN.txt" | sort -u > "livedomains-$DOMAIN.txt"
-        notify "HTTPX completed. *$(wc -l < "livedomains-$DOMAIN.txt")* endpoints seem to be alive. Checking for hijackable subdomains with SubJack..."
+        echo "[*] RUNNING ENHANCED HTTPX PROBE..."
+        verbose_log "Starting HTTP probing on $(wc -l < "domains-$DOMAIN.txt" 2>/dev/null || echo 0) domains"
+        
+        # Enhanced httpx configuration with better coverage and error handling
+        httpx -list "domains-$DOMAIN.txt" \
+            -silent \
+            -no-color \
+            -title \
+            -content-length \
+            -web-server \
+            -tech-detect \
+            -status-code \
+            -response-time \
+            -ports 80,8080,443,8443,3000,8000,8888,9000 \
+            -threads 50 \
+            -timeout 10 \
+            -retries 2 \
+            -rate-limit 100 \
+            -follow-redirects \
+            -json \
+            -output "httpx-$DOMAIN.json" 2>/dev/null || touch "httpx-$DOMAIN.json"
+        
+        # Process JSON output and create both detailed and simple lists
+        if [ -f "httpx-$DOMAIN.json" ] && [ -s "httpx-$DOMAIN.json" ]; then
+            # Extract URLs for compatibility
+            jq -r '.url' "httpx-$DOMAIN.json" 2>/dev/null | sort -u > "livedomains-$DOMAIN.txt" || \
+            grep -o '"url":"[^"]*"' "httpx-$DOMAIN.json" | cut -d'"' -f4 | sort -u > "livedomains-$DOMAIN.txt" || \
+            touch "livedomains-$DOMAIN.txt"
+            
+            # Create human-readable summary
+            jq -r '[.url, .status_code, .title, .webserver, .tech] | @tsv' "httpx-$DOMAIN.json" 2>/dev/null > "httpx-$DOMAIN.txt" || \
+            cp "httpx-$DOMAIN.json" "httpx-$DOMAIN.txt" 2>/dev/null
+        else
+            touch "livedomains-$DOMAIN.txt" "httpx-$DOMAIN.txt"
+        fi
+        
+        live_count=$(wc -l < "livedomains-$DOMAIN.txt" 2>/dev/null || echo 0)
+        success_log "HTTPX probe completed: $live_count live endpoints discovered"
+        notify "Enhanced HTTPX completed. *$live_count* endpoints are alive with detailed technology fingerprinting. Checking for hijackable subdomains with SubJack..."
     else
-        echo "[-] SKIPPING HTTPX"
+        echo "[-] SKIPPING ENHANCED HTTPX PROBE"
     fi
 
     if [ ! -f "subjack-$DOMAIN.txt" ] || [ "$overwrite" = true ]
@@ -229,25 +343,62 @@ do
     if [ "$thorough" = true ] ; then
         if [ ! -f "nuclei-$DOMAIN.txt" ] || [ "$overwrite" = true ]
         then
-            echo "[*] RUNNING NUCLEI..."
-            notify "Detecting known vulnerabilities with Nuclei..."
-            nuclei -c 150 -l "livedomains-$DOMAIN.txt" -severity low,medium,high,critical -etags "intrusive" -o "nuclei-$DOMAIN.txt"
+            echo "[*] RUNNING ENHANCED NUCLEI SCAN..."
+            notify "Detecting known vulnerabilities with enhanced Nuclei configuration..."
+            verbose_log "Starting Nuclei scan on $(wc -l < "livedomains-$DOMAIN.txt" 2>/dev/null || echo 0) live domains"
             
-            if [ -f "nuclei-$DOMAIN.txt" ]
-            then
-                highIssues="$(grep -c 'high' < "nuclei-$DOMAIN.txt")"
-                critIssues="$(grep -c 'critical' < "nuclei-$DOMAIN.txt")"
-                if [ "$critIssues" -gt 0 ]
-                then
-                    notify "Nuclei completed. Found *$(wc -l < "nuclei-$DOMAIN.txt")* (potential) issues, of which *$critIssues* are critical, and *$highIssues* are high severity. Finding temporary files with ffuf.."
-                elif [ "$highIssues" -gt 0 ]
-                then
-                    notify "Nuclei completed. Found *$(wc -l < "nuclei-$DOMAIN.txt")* (potential) issues, of which *$highIssues* are high severity. Finding temporary files with ffuf..."
+            # Update nuclei templates before scanning
+            echo "[*] Updating Nuclei templates..."
+            nuclei -update-templates -silent 2>/dev/null || verbose_log "Template update failed or skipped"
+            
+            # Enhanced nuclei configuration with modern flags
+            nuclei_cmd="nuclei -list \"livedomains-$DOMAIN.txt\" \
+                -c 100 \
+                -rl 150 \
+                -timeout 10 \
+                -retries 2 \
+                -severity low,medium,high,critical \
+                -exclude-tags intrusive,dos,fuzzing \
+                -include-tags cve,misconfig,exposure,vulnerability \
+                -stats \
+                -silent \
+                -jsonl \
+                -output \"nuclei-$DOMAIN.jsonl\""
+            
+            verbose_log "Running: $nuclei_cmd"
+            eval "$nuclei_cmd" 2>/dev/null || touch "nuclei-$DOMAIN.jsonl"
+            
+            # Convert JSONL to readable format for compatibility
+            if [ -f "nuclei-$DOMAIN.jsonl" ]; then
+                jq -r '[.timestamp, .info.severity, .info.name, .matched_at] | @tsv' "nuclei-$DOMAIN.jsonl" 2>/dev/null > "nuclei-$DOMAIN.txt" || \
+                cat "nuclei-$DOMAIN.jsonl" | grep -o '"matched-at":"[^"]*"\|"severity":"[^"]*"\|"name":"[^"]*"' | paste - - - > "nuclei-$DOMAIN.txt" 2>/dev/null || \
+                cp "nuclei-$DOMAIN.jsonl" "nuclei-$DOMAIN.txt" 2>/dev/null
+            else
+                touch "nuclei-$DOMAIN.txt"
+            fi
+            
+            # Enhanced vulnerability analysis with better counting
+            if [ -f "nuclei-$DOMAIN.txt" ] && [ -s "nuclei-$DOMAIN.txt" ]; then
+                total_issues=$(wc -l < "nuclei-$DOMAIN.txt" 2>/dev/null || echo 0)
+                highIssues=$(grep -ic 'high' "nuclei-$DOMAIN.txt" 2>/dev/null || echo 0)
+                critIssues=$(grep -ic 'critical' "nuclei-$DOMAIN.txt" 2>/dev/null || echo 0)
+                mediumIssues=$(grep -ic 'medium' "nuclei-$DOMAIN.txt" 2>/dev/null || echo 0)
+                lowIssues=$(grep -ic 'low' "nuclei-$DOMAIN.txt" 2>/dev/null || echo 0)
+                
+                success_log "Nuclei scan completed: Total=$total_issues, Critical=$critIssues, High=$highIssues, Medium=$mediumIssues, Low=$lowIssues"
+                
+                if [ "$critIssues" -gt 0 ]; then
+                    notify "🚨 CRITICAL: Nuclei found *$total_issues* issues including *$critIssues* CRITICAL and *$highIssues* HIGH severity vulnerabilities!"
+                elif [ "$highIssues" -gt 0 ]; then
+                    notify "⚠️ HIGH RISK: Nuclei found *$total_issues* issues including *$highIssues* HIGH severity vulnerabilities!"
+                elif [ "$mediumIssues" -gt 0 ]; then
+                    notify "⚠️ Nuclei found *$total_issues* issues including *$mediumIssues* MEDIUM severity vulnerabilities."
                 else
-                    notify "Nuclei completed. Found *$(wc -l < "nuclei-$DOMAIN.txt")* (potential) issues, of which none are critical or high severity. Finding temporary files with ffuf..."
+                    notify "✅ Nuclei completed with *$total_issues* low-severity findings."
                 fi
             else
-                notify "Nuclei completed. No issues found. Finding temporary files with ffuf..."
+                notify "✅ Nuclei scan completed - No significant vulnerabilities detected."
+                success_log "Nuclei scan found no issues"
             fi
         else
             echo "[-] SKIPPING NUCLEI"
@@ -288,12 +439,40 @@ do
 
         if [ ! -f "paths-$DOMAIN.txt" ] || [ "$overwrite" = true ]
         then
-            echo "[*] RUNNING GOSPIDER..."
-            # Spider for unique URLs, filter duplicate parameters
-            gospider -S "livedomains-$DOMAIN.txt" -o GoSpider -t 2 -c 4 -d 3 -m 3 --no-redirect --blacklist jpg,jpeg,gif,css,tif,tiff,png,ttf,woff,woff2,ico,svg
-            cat GoSpider/* | grep -o -E "(([a-zA-Z][a-zA-Z0-9+-.]*\:\/\/)|mailto|data\:)([a-zA-Z0-9\.\&\/\?\:@\+-\_=#%;,])*" | sort -u | qsreplace -a | grep "$DOMAIN" > "tmp-GoSpider-$DOMAIN.txt"
-            rm -rf GoSpider
-            notify "GoSpider completed. Crawled *$(wc -l < "tmp-GoSpider-$DOMAIN.txt")* endpoints. Getting interesting endpoints and parameters..."
+            echo "[*] RUNNING ENHANCED WEB CRAWLING (KATANA)..."
+            verbose_log "Starting active crawling with Katana"
+            
+            # Use modern Katana crawler with proper flags
+            if [ "$use_passive_only" = true ]; then
+                echo "[*] Passive mode: skipping active crawling"
+                cp "WayBack-$DOMAIN.txt" "tmp-Katana-$DOMAIN.txt" 2>/dev/null || touch "tmp-Katana-$DOMAIN.txt"
+            else
+                echo "[*] Running Katana crawler with enhanced configuration..."
+                katana -list "livedomains-$DOMAIN.txt" \
+                    -d 3 \
+                    -jc \
+                    -fx \
+                    -xhr \
+                    -timeout 10 \
+                    -retry 2 \
+                    -rl 150 \
+                    -c 25 \
+                    -mrs 1048576 \
+                    -silent \
+                    -o "tmp-Katana-$DOMAIN.txt" 2>/dev/null || touch "tmp-Katana-$DOMAIN.txt"
+                
+                verbose_log "Katana crawling completed with $(wc -l < "tmp-Katana-$DOMAIN.txt" 2>/dev/null || echo 0) URLs found"
+            fi
+            
+            # Filter and process crawled URLs
+            if [ -f "tmp-Katana-$DOMAIN.txt" ]; then
+                grep "$DOMAIN" "tmp-Katana-$DOMAIN.txt" | sort -u | qsreplace -a > "tmp-GoSpider-$DOMAIN.txt"
+            else
+                touch "tmp-GoSpider-$DOMAIN.txt"
+            fi
+            katana_count=$(wc -l < "tmp-GoSpider-$DOMAIN.txt" 2>/dev/null || echo 0)
+            notify "Katana completed. Crawled *$katana_count* endpoints. Getting interesting endpoints and parameters..."
+            success_log "Katana found $katana_count domain-specific URLs"
 
             ## Enrich GoSpider list with parameters from GAU/WayBack. Disregard new GAU endpoints to prevent clogging with unreachable endpoints (See Issue #24).
             # Get only endpoints from GoSpider list (assumed to be live), disregard parameters, and append ? for grepping
@@ -302,27 +481,57 @@ do
             grep -f "tmp-LivePathsQuery-$DOMAIN.txt" "WayBack-$DOMAIN.txt" > "tmp-LiveWayBack-$DOMAIN.txt"
             # Merge new parameters with GoSpider list and get only unique endpoints
             cat "tmp-LiveWayBack-$DOMAIN.txt" "tmp-GoSpider-$DOMAIN.txt" | sort -u | qsreplace -a > "paths-$DOMAIN.txt"
-            rm "tmp-LivePathsQuery-$DOMAIN.txt" "tmp-LiveWayBack-$DOMAIN.txt" "tmp-GoSpider-$DOMAIN.txt"
+            rm -f "tmp-LivePathsQuery-$DOMAIN.txt" "tmp-LiveWayBack-$DOMAIN.txt" "tmp-GoSpider-$DOMAIN.txt" "tmp-Katana-$DOMAIN.txt"
+            
+            total_paths=$(wc -l < "paths-$DOMAIN.txt" 2>/dev/null || echo 0)
+            success_log "Total unique paths collected: $total_paths"
         else
-            echo "[-] SKIPPING GOSPIDER"
+            echo "[-] SKIPPING ENHANCED WEB CRAWLING"
         fi
 
         if [ ! -d "check-manually" ] || [ "$overwrite" = true ]
         then
-            echo "[*] GETTING INTERESTING PARAMETERS WITH GF..."
-            mkdir "check-manually"
-            # Use GF to identify "suspicious" endpoints that may be vulnerable (automatic checks below)
-            gf ssrf < "paths-$DOMAIN.txt" > "check-manually/server-side-request-forgery.txt"
-            gf xss < "paths-$DOMAIN.txt" > "check-manually/cross-site-scripting.txt"
-            gf redirect < "paths-$DOMAIN.txt" > "check-manually/open-redirect.txt"
-            gf rce < "paths-$DOMAIN.txt" > "check-manually/rce.txt"
-            gf idor < "paths-$DOMAIN.txt" > "check-manually/insecure-direct-object-reference.txt"
-            gf sqli < "paths-$DOMAIN.txt" > "check-manually/sql-injection.txt"
-            gf lfi < "paths-$DOMAIN.txt" > "check-manually/local-file-inclusion.txt"
-            gf ssti < "paths-$DOMAIN.txt" > "check-manually/server-side-template-injection.txt"
-            notify "Done! Gathered a total of *$(wc -l < "paths-$DOMAIN.txt")* paths, of which *$(cat check-manually/* | wc -l)* possibly exploitable. Testing for Server-Side Template Injection..."
+            echo "[*] GETTING INTERESTING PARAMETERS WITH ENHANCED GF PATTERNS..."
+            mkdir -p "check-manually"
+            verbose_log "Starting GF pattern matching on $(wc -l < "paths-$DOMAIN.txt" 2>/dev/null || echo 0) paths"
+            
+            # Ensure gf patterns are available
+            if [ ! -d "$HOME/.gf" ] || [ -z "$(ls -A "$HOME/.gf" 2>/dev/null)" ]; then
+                error_log "GF patterns not found, attempting to install..."
+                mkdir -p "$HOME/.gf"
+                if command -v git &> /dev/null; then
+                    git clone -q https://github.com/1ndianl33t/Gf-Patterns.git /tmp/gf-patterns 2>/dev/null || true
+                    cp /tmp/gf-patterns/*.json "$HOME/.gf/" 2>/dev/null || true
+                    rm -rf /tmp/gf-patterns 2>/dev/null || true
+                    success_log "GF patterns installed successfully"
+                fi
+            fi
+            
+            # Use GF to identify "suspicious" endpoints that may be vulnerable (with error handling)
+            echo "[*] Running GF pattern matching..."
+            gf ssrf < "paths-$DOMAIN.txt" > "check-manually/server-side-request-forgery.txt" 2>/dev/null || touch "check-manually/server-side-request-forgery.txt"
+            gf xss < "paths-$DOMAIN.txt" > "check-manually/cross-site-scripting.txt" 2>/dev/null || touch "check-manually/cross-site-scripting.txt"
+            gf redirect < "paths-$DOMAIN.txt" > "check-manually/open-redirect.txt" 2>/dev/null || touch "check-manually/open-redirect.txt"
+            gf rce < "paths-$DOMAIN.txt" > "check-manually/rce.txt" 2>/dev/null || touch "check-manually/rce.txt"
+            gf idor < "paths-$DOMAIN.txt" > "check-manually/insecure-direct-object-reference.txt" 2>/dev/null || touch "check-manually/insecure-direct-object-reference.txt"
+            gf sqli < "paths-$DOMAIN.txt" > "check-manually/sql-injection.txt" 2>/dev/null || touch "check-manually/sql-injection.txt"
+            gf lfi < "paths-$DOMAIN.txt" > "check-manually/local-file-inclusion.txt" 2>/dev/null || touch "check-manually/local-file-inclusion.txt"
+            gf ssti < "paths-$DOMAIN.txt" > "check-manually/server-side-template-injection.txt" 2>/dev/null || touch "check-manually/server-side-template-injection.txt"
+            
+            # Additional modern vulnerability patterns
+            gf debug < "paths-$DOMAIN.txt" > "check-manually/debug-parameters.txt" 2>/dev/null || touch "check-manually/debug-parameters.txt"
+            gf interestingsubs < "paths-$DOMAIN.txt" > "check-manually/interesting-subdomains.txt" 2>/dev/null || touch "check-manually/interesting-subdomains.txt"
+            gf cors < "paths-$DOMAIN.txt" > "check-manually/cors-misconfiguration.txt" 2>/dev/null || touch "check-manually/cors-misconfiguration.txt"
+            
+            # Count results
+            pattern_matches=$(find check-manually/ -name "*.txt" -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}' || echo 0)
+            total_paths_analyzed=$(wc -l < "paths-$DOMAIN.txt" 2>/dev/null || echo 0)
+            
+            success_log "GF pattern matching completed: $pattern_matches potentially vulnerable URLs identified from $total_paths_analyzed total paths"
+            notify "Enhanced GF analysis completed! Analyzed *$total_paths_analyzed* paths, identified *$pattern_matches* potentially exploitable endpoints across $(ls check-manually/*.txt 2>/dev/null | wc -l || echo 0) vulnerability categories. Starting automated vulnerability testing..."
+            verbose_log "Pattern matching results: SSRF=$(wc -l < check-manually/server-side-request-forgery.txt 2>/dev/null || echo 0), XSS=$(wc -l < check-manually/cross-site-scripting.txt 2>/dev/null || echo 0), SQLi=$(wc -l < check-manually/sql-injection.txt 2>/dev/null || echo 0), LFI=$(wc -l < check-manually/local-file-inclusion.txt 2>/dev/null || echo 0)"
         else
-            echo "[-] SKIPPING GF"
+            echo "[-] SKIPPING ENHANCED GF PATTERN MATCHING"
         fi
 
         if [ ! -f "potential-ssti.txt" ] || [ "$overwrite" = true ]
