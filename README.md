@@ -18,7 +18,7 @@
 
 > **Loxs** is an easy-to-use tool that finds web issues like `LFI` - `OR` - `SQLi` - `XSS` - `CRLF`. <br><br> *`Made by`* - [`AnonKryptiQuz`](https://github.com/AnonKryptiQuz) x [`Coffinxp`](https://github.com/coffinxp) x [`HexShad0w`](https://github.com/HexShad0w) x [`Naho`](https://github.com/Naho666) x [`1hehaq`](https://github.com/1hehaq) x [`Hghost010`](https://github.com/Hghost0x00)!
 
-*`Made by`*  - [`Kdairatchi`](https://github.com/kdairatchi)
+*`Enhanced by`*  - [`Kdairatchi`](https://github.com/kdairatchi) Check [`ENHANCEMENTS`](https://github.com/kdairatchi/loxs/ENHANCEMENTS.md) & [`AUTOMATION GUIDE`](https://github.com/kdairatchi/loxs/AUTOMATION_GUIDE.md)
 </div>
 
 <hr>
@@ -210,6 +210,7 @@ sudo mv chromedriver /usr/bin
 
 
 <br>
+
 
 
 
