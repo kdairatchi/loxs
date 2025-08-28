@@ -1,7 +1,7 @@
 # ABOUTME: Enhanced Bug Bounty Reconnaissance Script - Comprehensive Upgrade Documentation
 # ABOUTME: Documents all improvements made to filter.sh including modern tool integration and enhanced functionality
 
-# Enhanced Bug Bounty Reconnaissance Script - Upgrade Summary
+# Bug Bounty Reconnaissance Script 
 
 ## 🚀 Major Enhancements Completed
 

@@ -37,10 +37,11 @@ sort -u ip.txt -o ip.txt
 
 if [ -s ip.txt ]; then
     echo "[*] Running hunter_enhanced..."
-    python3 hunter_enhanced.py ip.txt --cve+ports --html-output hunter_report.html --threads 20 --timeout 20 --quiet
+    python3 hunter.py ip.txt --cve+ports --html-output hunter_report.html --screenshot
 fi
 
 echo "[*] Probing live hosts..."
+cat ips.txt | httpx -status-code -title -o liveips.txt 2>/dev/null
 cat subs.txt | httpx -status-code -title -silent -sr -o live.txt 2>/dev/null
 
 echo "[*] Running nuclei..."

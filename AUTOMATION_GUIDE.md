@@ -1,36 +1,19 @@
-# ABOUTME: Complete automation guide for enhanced LOXS suite with filter.sh integration
+# ABOUTME: Complete automation guide for LOXS suite with filter.sh integration
 # ABOUTME: Documents the automated workflow from reconnaissance through vulnerability assessment
 
 # 🚀 Enhanced LOXS Automation Suite
 
-## Complete Integration: filter.sh → loxs.py → hunter.py
-
-### 🎯 **Quick Start (One Command)**
-
-```bash
-# Complete automated workflow
-./automate_all.py -d target.com
-
-# Quick scan mode
-./automate_all.py -d target.com --quick
-
-# Passive reconnaissance only
-./automate_all.py -d target.com --passive
-
-# Custom configuration
-./automate_all.py -d target.com --max-urls 2000 --scan-types 1 2 3 4 --verbose
-```
-
 ## 📋 **Available Scripts & Their Purpose**
 
+# Depracated
 ### 🔧 **Core Integration Scripts**
 
-| Script | Purpose | Usage |
-|--------|---------|-------|
-| `automate_all.py` | **Master automation** - Complete workflow | `./automate_all.py -d domain.com` |
-| `loxs_integration.py` | **Data processor** - filter.sh → loxs.py bridge | `./loxs_integration.py -d domain_output/` |
-| `loxs_wrapper.py` | **LOXS automator** - Batch vulnerability scanning | `./loxs_wrapper.py -f urls.txt` |
-| `orchestrator.py` | **Advanced orchestrator** - Full-featured pipeline | `./orchestrator.py -d domain.com` |
+#| Script | Purpose | Usage |
+#|--------|---------|-------|
+#| `automate_all.py` | **Master automation** - Complete workflow | `./automate_all.py -d domain.com` |
+#| `loxs_integration.py` | **Data processor** - filter.sh → loxs.py bridge | `./loxs_integration.py -d domain_output/` |
+#| `loxs_wrapper.py` | **LOXS automator** - Batch vulnerability scanning | `./loxs_wrapper.py -f urls.txt` |
+#| `orchestrator.py` | **Advanced orchestrator** - Full-featured pipeline | `./orchestrator.py -d domain.com` |
 
 ### 🛡️ **Enhanced Security Tools**
 
@@ -38,8 +21,7 @@
 |--------|---------|-------------|
 | `filter.sh` | **Enhanced reconnaissance** - Modern tools (Katana, URLfinder) | ✅ Automated |
 | `loxs.py` | **Original vulnerability scanner** - Interactive mode | ✅ Wrapper integration |
-| `loxs_enhanced.py` | **Enhanced scanner** - File input support | ✅ Direct integration |
-| `hunter_enhanced.py` | **IP analysis** - CVE & port reconnaissance | ✅ JSON output |
+| `hunter.py` | **IP analysis** - CVE & port reconnaissance | ✅ JSON output |
 
 ## 🔄 **Automated Workflow Steps**
 
@@ -81,29 +63,14 @@
 ```
 
 ### **Custom Configuration**
-```bash
-# Quick passive scan with specific vulnerability types
-./automate_all.py -d target.com \
-    --quick \
-    --passive \
-    --max-urls 500 \
-    --scan-types 1 3 4 \
-    --output /tmp/scans
-```
 
 ### **Manual Integration Steps**
 ```bash
 # Step 1: Run reconnaissance
 ./filter.sh -d example.com -o results --verbose
 
-# Step 2: Process results for LOXS
-./loxs_integration.py -d results/example.com --max-urls 1000
-
-# Step 3: Run batch vulnerability scanning
-./loxs_wrapper.py -f results/example.com/loxs_urls_example.com.txt -t 1 2 3 4
-
-# Step 4: Analyze IPs
-./hunter_enhanced.py -f results/example.com/ip-addresses-example.com.txt --json-output results.json
+#  Analyze IPs
+./hunter.py -f results/example.com/ip-addresses-example.com.txt --json-output results.json
 ```
 
 ## 📁 **Output Structure**
@@ -124,7 +91,6 @@ scan_results/
     │   └── open-redirect.txt
     ├── loxs_urls_target.com.txt         # Processed URLs for LOXS
     ├── hunter_results_target.com.json   # IP analysis results
-    ├── integration_report_target.com.txt # Integration summary
     └── FINAL_REPORT_target.com_TIMESTAMP.txt # Complete report
 ```
 
@@ -181,31 +147,7 @@ tail -n 50 ips.txt
 
 ## 🎛️ **Advanced Usage**
 
-### **Using Individual Components**
 
-#### **1. Enhanced LOXS Scanner**
-```bash
-# File-based scanning with enhanced features
-./loxs_enhanced.py -f urls.txt --scan-types lfi xss sqli --threads 50
-```
-
-#### **2. GF Pattern Integration**
-```bash
-# Target specific patterns
-./loxs_wrapper.py -f urls.txt -g check-manually/
-```
-
-#### **3. Hunter IP Analysis**
-```bash
-# Comprehensive IP reconnaissance
-./hunter_enhanced.py -f ips.txt --cve+ports --html-output report.html
-```
-
-### **2. Orchestrator for Complex Workflows**
-```bash
-# Full-featured orchestration
-./orchestrator.py -d target.com --verbose --passive-only
-```
 
 ## 🛡️ **Security Best Practices**
 
@@ -254,58 +196,3 @@ tail -n 50 ips.txt
 go install github.com/projectdiscovery/katana/cmd/katana@latest
 go install github.com/projectdiscovery/urlfinder/cmd/urlfinder@latest
 ```
-
-#### **2. Large File Processing**
-```bash
-# Issue: Out of memory with huge URL files
-# Fix: Reduce max-urls parameter
-./automate_all.py -d target.com --max-urls 500
-```
-
-#### **3. LOXS Integration Issues**
-```bash
-# Issue: Original loxs.py interactive prompts
-# Fix: Use wrapper script
-./loxs_wrapper.py -f urls.txt -t 1 2 3 4
-```
-
-### **Debug Mode**
-```bash
-# Enable verbose output for debugging
-./automate_all.py -d target.com --verbose
-```
-
-## 🚀 **Quick Reference Commands**
-
-```bash
-# 🎯 ONE-LINER: Complete automation
-./automate_all.py -d target.com
-
-# 🔍 Reconnaissance only
-./filter.sh -d target.com --verbose
-
-# 🎯 Vulnerability scanning only  
-./loxs_wrapper.py -f urls.txt
-
-# 🕵️ IP analysis only
-./hunter_enhanced.py -f ips.txt --cve+ports
-
-# 📊 Integration processing
-./loxs_integration.py -d domain_dir/
-
-# 🎛️ Advanced orchestration
-./orchestrator.py -d target.com --verbose
-```
-
----
-
-## 🎉 **Success! Complete Integration Achieved**
-
-✅ **filter.sh** → Enhanced reconnaissance with modern tools
-✅ **loxs.py** → Automated vulnerability scanning with file input  
-✅ **hunter.py** → Enhanced IP analysis with JSON output
-✅ **Orchestration** → Complete workflow automation
-✅ **Efficiency** → Smart file sampling with head/tail
-✅ **Integration** → Seamless data flow between all components
-
-**Result**: One-command complete security assessment pipeline! 🛡️

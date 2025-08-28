@@ -1,8 +1,6 @@
 #!/bin/bash
 # ABOUTME: Enhanced automated bug bounty reconnaissance script with modern tools integration
 # ABOUTME: Consolidates security scanning tools including katana, urlfinder, gf patterns, nuclei, and custom payload testing
-## Enhanced Automated Bug Bounty recon script
-## Based on original by Cas van Cooten, enhanced for modern tool integration
 ## Enhanced by Doctor K's security research team
 
 # Prevent gf alias conflicts (unalias gf in case GitHub alias is interfering)
@@ -79,10 +77,10 @@ do
         echo "-v, --verbose                 enable verbose output (default: false)"
         echo "-p, --passive-only            use only passive reconnaissance techniques (default: false)"
         echo " "
-        echo "Enhanced Features:"
+        echo "Features:"
         echo "- Modern Katana crawler with proper flags"
         echo "- URLfinder for passive URL discovery"
-        echo "- Enhanced GF pattern matching (auto-unalias gf)"
+        echo "- GF pattern matching (auto-unalias gf)"
         echo "- Improved error handling and logging"
         echo "- Better tool integration and performance"
         echo " "
