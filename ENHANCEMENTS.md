@@ -180,6 +180,7 @@ go install github.com/projectdiscovery/katana/cmd/katana@latest
 go install github.com/projectdiscovery/urlfinder/cmd/urlfinder@latest
 go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install github.com/kdairatchi/sqry@latest
 ```
 
 ### **Automatic Dependency Management:**
