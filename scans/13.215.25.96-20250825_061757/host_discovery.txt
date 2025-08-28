@@ -1,4 +1,0 @@
-# Nmap 7.97 scan initiated Mon Aug 25 06:17:57 2025 as: nmap -sn -oN scans/13.215.25.96-20250825_061757/host_discovery.txt 13.215.25.96
-Nmap scan report for ec2-13-215-25-96.ap-southeast-1.compute.amazonaws.com (13.215.25.96)
-Host is up (0.082s latency).
-# Nmap done at Mon Aug 25 06:17:58 2025 -- 1 IP address (1 host up) scanned in 1.08 seconds

@@ -1,8 +1,0 @@
-# Nmap 7.97 scan initiated Mon Aug 25 06:35:43 2025 as: nmap --script dns-recursion,dns-service-discovery,dns-nsid -p53 -oN scans/13.215.25.96-20250825_061757/dns_enum.txt 13.215.25.96
-Nmap scan report for ec2-13-215-25-96.ap-southeast-1.compute.amazonaws.com (13.215.25.96)
-Host is up (0.083s latency).
-
-PORT   STATE SERVICE
-53/tcp open  domain
-
-# Nmap done at Mon Aug 25 06:35:48 2025 -- 1 IP address (1 host up) scanned in 5.33 seconds
