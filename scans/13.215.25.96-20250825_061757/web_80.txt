@@ -1,1 +1,0 @@
-# Nmap 7.97 scan initiated Mon Aug 25 06:35:48 2025 as: nmap --script http-title,http-headers,http-methods,http-server-header,http-vuln* -p80 -oN scans/13.215.25.96-20250825_061757/web_80.txt 13.215.25.96
