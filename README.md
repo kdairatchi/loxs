@@ -70,10 +70,10 @@ If you find LOXS useful and want to support its development, consider making a d
 
 | Cryptocurrency | Address |
 |----------------|---------|
-| **Bitcoin (BTC)** | `bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh` |
-| **Ethereum (ETH)** | `0x742d35Cc6634C0532925a3b8D400D5fbDf5b9E4D` |
-| **Litecoin (LTC)** | `LTAi6LQfDhkZi6y2CqBkRsG9v6ZzpXdKzy` |
-| **Monero (XMR)** | `4B3FBm9AB7B2Y2DftW3FBBP1QdE9E4P4Q4qXs3LWaFVL5fQ1E2A3` |
+| **Bitcoin (BTC)** | `` |
+| **Ethereum (ETH)** | `` |
+| **Litecoin (LTC)** | `` |
+| **Monero (XMR)** | `` |
 
 </div>
 
@@ -521,4 +521,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <p align="center">
 <img src="https://github.com/user-attachments/assets/9ec3fed0-45ff-4cb3-988c-f8cd66e85082">
+
 </p>
