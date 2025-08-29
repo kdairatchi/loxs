@@ -7,18 +7,29 @@ if [ -z "$TARGET" ]; then
     exit 1
 fi
 
+echo "[*] Making env and results directory..."
+python3 -m venv venv
+source venv/bin/activate
+mkdir -p results/"$TARGET"
+cd results/"$TARGET"
+
 echo "[*] Running WHOIS..."
 whois "$TARGET" > whois.txt 2>/dev/null
-
 echo "[*] Running subdomain enumeration..."
 subfinder -d "$TARGET" -o subs_subfinder.txt 2>/dev/null
+echo "[*] Running crt subdomain enumeration..."
 curl -s https://crt.sh/\?q\=%.$TARGET.com\&output\=json | jq -r '.[].name_value' | sed 's/\*//g' | sort -u > subs_crtsh.txt
+echo "[*] Running bufferover subdomain enumeration..."
 curl -s "https://dns.bufferover.run/dns?q=%.$TARGET" | jq -r '.FDNS_A[]?' 2>/dev/null | cut -d',' -f2 | sort -u > subs_bufferover.txt
+echo "[*] Running archive subdomain enumeration..."
 curl -s "http://web.archive.org/cdx/search/cdx?url=*.$TARGET/*&output=text&fl=original&collapse=urlkey" 2>/dev/null | sed -e 's|https*://||' -e 's|/.*||' | sort -u > subs_webarchive.txt
+echo "[*] Running omnisint subdomain enumeration..."
 curl -s "https://sonar.omnisint.io/subdomains/$TARGET" 2>/dev/null | grep -oE "[A-Za-z0-9._-]+\.$TARGET" | sort -u > subs_omnisint.txt
+echo "[*] Running assetfinder subdomain enumeration..."
 assetfinder --subs-only "$TARGET" | sort -u > subs_assetfinder.txt 2>/dev/null
+echo "[*] Running assetfinder passive subdomain enumeration..."
 amass enum -passive -d "$TARGET" > subs_amass.txt 2>/dev/null
-
+echo "[*] Putting all subdomains together..."
 cat subs_*.txt | sort -u > subs.txt
 
 echo "[*] Running DNS queries..."
@@ -37,7 +48,7 @@ sort -u ip.txt -o ip.txt
 
 if [ -s ip.txt ]; then
     echo "[*] Running hunter_enhanced..."
-    python3 hunter.py ip.txt --cve+ports --html-output hunter_report.html --screenshot
+    python3 utils/hunter.py ip.txt --cve+ports --html-output hunter_report.html --screenshot
 fi
 
 echo "[*] Probing live hosts..."

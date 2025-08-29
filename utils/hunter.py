@@ -576,6 +576,14 @@ class EnhancedLazyHunter:
         if output_file is None:
             output_file = f"hunter_analysis_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         
+        # Ensure results directory exists
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+        
+        # Update output file path to use results directory
+        if not Path(output_file).is_absolute():
+            output_file = results_dir / output_file
+        
         report_data = {
             'scan_info': {
                 'timestamp': datetime.datetime.now().isoformat(),
@@ -603,6 +611,14 @@ class EnhancedLazyHunter:
         """Generate cyberpunk-styled HTML report with enhanced visualization"""
         if output_file is None:
             output_file = f"hunter_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        
+        # Ensure results directory exists
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+        
+        # Update output file path to use results directory
+        if not Path(output_file).is_absolute():
+            output_file = results_dir / output_file
         
         # Calculate statistics
         total_ips = len(self.results)

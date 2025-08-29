@@ -655,9 +655,15 @@ try:
         if not filename.lower().endswith('.html'):
             filename += '.html'
         
-        absolute_path = os.path.abspath(filename)
+        # Create results directory if it doesn't exist
+        results_dir = os.path.join(os.getcwd(), 'results')
+        os.makedirs(results_dir, exist_ok=True)
+        
+        # Save report in results directory
+        report_path = os.path.join(results_dir, filename)
+        absolute_path = os.path.abspath(report_path)
         print(f"{Fore.YELLOW}\nDEBUG: {Fore.WHITE}Saving HTML report to {absolute_path}")
-        print(f"{Fore.YELLOW}DEBUG: {Fore.WHITE}Current working directory: {os.getcwd()}\n")
+        print(f"{Fore.YELLOW}DEBUG: {Fore.WHITE}Results directory: {results_dir}\n")
         
         try:
             with open(absolute_path, 'w', encoding='utf-8') as f:

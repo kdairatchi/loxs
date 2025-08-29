@@ -1,3 +1,36 @@
-*.claude
-*.
-*.output
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+*.egg-info/
+
+# Logs
+*.log
+*.log.*
+
+# Output and Results  
+output/
+results/*/
+!results/.gitkeep
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

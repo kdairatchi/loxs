@@ -216,8 +216,8 @@ notify "Starting recon on *${#DOMAINS[@]}* domains."
 
 for DOMAIN in "${DOMAINS[@]}"
 do
-    mkdir -p "$DOMAIN"
-    cd "$DOMAIN" || { echo "Something went wrong"; exit 1; }
+    mkdir -p "results/$DOMAIN"
+    cd "results/$DOMAIN" || { echo "Something went wrong"; exit 1; }
 
     cp -r "$scriptDir/dist" .
 

@@ -1,13 +1,13 @@
 #!/bin/bash
 # ==========================================================
-#  Ultimate Nmap Automator v2 – Intelligent Recon
-#  Author: kdairatchi style 💀
+#  Nmap Automator –  Recon
+#  Author: kdairatchi 💀
 # ==========================================================
 
 TARGET=$1
 MODE=$2   # optional: vuln, all
 DATE=$(date +"%Y%m%d_%H%M%S")
-OUTPUT_DIR="scans/$TARGET-$DATE"
+OUTPUT_DIR="results/$TARGET/$DATE"
 
 # Colors
 RED="\e[31m"
@@ -19,7 +19,7 @@ RESET="\e[0m"
 banner() {
     echo -e "${RED}"
     echo "==============================================="
-    echo "          🔎 Ultimate Nmap Automator v2 🔎"
+    echo "          🔎  Nmap Automator v2 🔎"
     echo "==============================================="
     echo -e "${RESET}"
 }
